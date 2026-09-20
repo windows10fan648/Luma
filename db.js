@@ -249,6 +249,21 @@ async function initDatabase() {
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
           )
         `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS premium_gifts (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            sender_id INT NOT NULL,
+            recipient_id INT NOT NULL,
+            stripe_checkout_session_id VARCHAR(120) NOT NULL UNIQUE,
+            plan VARCHAR(32) NOT NULL DEFAULT 'premium',
+            duration_days INT NOT NULL,
+            status VARCHAR(24) NOT NULL DEFAULT 'paid',
+            expires_at DATETIME NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE
+          )
+        `);
 
         const [users] = await connection.query('SELECT id FROM users WHERE username = ?', ['you']);
         let userId = users[0]?.id;

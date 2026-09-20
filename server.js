@@ -36,6 +36,14 @@ app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), asyn
   try {
     const event = JSON.parse(req.body.toString()); const object = event.data.object;
     if (['checkout.session.completed'].includes(event.type)) {
+      const giftRecipientId = Number(object.metadata?.gift_recipient_id); const senderId = Number(object.metadata?.sender_id); const giftDays = Math.min(Math.max(Number(object.metadata?.duration_days) || 30, 1), 365);
+      if (giftRecipientId && senderId && object.payment_status === 'paid') {
+        const existingGift = await query('SELECT id FROM premium_gifts WHERE stripe_checkout_session_id = ?', [object.id]);
+        if (!existingGift.length) {
+          await query(`INSERT INTO premium_gifts (sender_id, recipient_id, stripe_checkout_session_id, duration_days, expires_at) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL ${giftDays} DAY))`, [senderId, giftRecipientId, object.id, giftDays]);
+          await query('INSERT INTO notifications (user_id, type, title, body, link) VALUES (?, ?, ?, ?, ?)', [giftRecipientId, 'premium_gift', 'You received Luma Premium', `A friend gifted you Premium for ${giftDays} days.`, '/billing']);
+        }
+      }
       const userId = Number(object.metadata?.user_id); const subscriptionId = object.subscription;
       if (userId && subscriptionId) {
         const subscription = await stripeRequest(`subscriptions/${subscriptionId}`, {}, 'GET');
@@ -133,6 +141,8 @@ app.get('/api/auth/me', async (req, res) => { try { const user = await currentUs
 async function entitlement(userId) {
   const [owner] = await query("SELECT user_id FROM workspace_members WHERE user_id = ? AND role = 'owner' LIMIT 1", [userId]);
   if (owner) return { plan: 'premium', source: 'owner', expiresAt: null };
+  const [gift] = await query("SELECT plan, expires_at FROM premium_gifts WHERE recipient_id = ? AND status = 'paid' AND expires_at > NOW() ORDER BY expires_at DESC LIMIT 1", [userId]);
+  if (gift) return { plan: gift.plan, source: 'gift', expiresAt: gift.expires_at };
   const [promo] = await query('SELECT plan, expires_at FROM promo_redemptions WHERE user_id = ? AND expires_at > NOW() ORDER BY expires_at DESC LIMIT 1', [userId]);
   if (promo) return { plan: promo.plan, source: 'promo', expiresAt: promo.expires_at };
   const [subscription] = await query("SELECT plan, status, current_period_end FROM subscriptions WHERE user_id = ? AND status IN ('active', 'trialing') AND current_period_end > NOW()", [userId]);
@@ -148,6 +158,17 @@ app.post('/api/billing/checkout', requireAuth, async (req, res) => {
     const base = { mode: 'subscription', 'line_items[0][price]': process.env.STRIPE_PREMIUM_PRICE_ID, 'line_items[0][quantity]': '1', success_url: `${process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`}/billing?success=1`, cancel_url: `${process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`}/billing?canceled=1`, 'metadata[user_id]': String(req.user.id), 'subscription_data[metadata][user_id]': String(req.user.id) };
     if (existing?.stripe_customer_id) base.customer = existing.stripe_customer_id; else if (req.user.email) base.customer_email = req.user.email;
     const session = await stripeRequest('checkout/sessions', base); res.json({ url: session.url });
+  } catch (error) { console.error(error); res.status(502).json({ error: error.message }); }
+});
+app.post('/api/billing/gifts/checkout', requireAuth, async (req, res) => {
+  if (!stripeConfigured() || !process.env.STRIPE_GIFT_AMOUNT) return res.status(503).json({ error: 'Premium gifts are not configured yet.' });
+  const recipientId = Number(req.body.recipientId); const durationDays = Math.min(Math.max(Number(req.body.durationDays) || 30, 1), 365);
+  if (!recipientId || recipientId === Number(req.user.id)) return res.status(400).json({ error: 'Choose a friend to receive the gift.' });
+  try {
+    const [friend] = await query('SELECT users.id, users.email, users.display_name FROM friendships JOIN users ON users.id = friendships.friend_id WHERE friendships.user_id = ? AND users.id = ? AND users.email IS NOT NULL', [req.user.id, recipientId]);
+    if (!friend) return res.status(403).json({ error: 'You can only gift Premium to an accepted friend.' });
+    const base = { mode: 'payment', 'line_items[0][price_data][currency]': String(process.env.STRIPE_GIFT_CURRENCY || 'pln').toLowerCase(), 'line_items[0][price_data][unit_amount]': String(Math.round(Number(process.env.STRIPE_GIFT_AMOUNT))), 'line_items[0][price_data][product_data][name]': `Luma Premium gift (${durationDays} days)`, 'line_items[0][quantity]': '1', success_url: `${process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`}/billing?gift=success`, cancel_url: `${process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`}/billing?gift=canceled`, 'metadata[gift_recipient_id]': String(friend.id), 'metadata[sender_id]': String(req.user.id), 'metadata[duration_days]': String(durationDays), receipt_email: req.user.email || undefined };
+    const session = await stripeRequest('checkout/sessions', Object.fromEntries(Object.entries(base).filter(([, value]) => value !== undefined))); res.json({ url: session.url });
   } catch (error) { console.error(error); res.status(502).json({ error: error.message }); }
 });
 app.post('/api/billing/portal', requireAuth, async (req, res) => {
