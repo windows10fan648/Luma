@@ -1,5 +1,5 @@
 if (window.lucide) lucide.createIcons();
-const state = { channels: [], activeChannel: null, members: [], user: null, mediaStream: null, muted: false, eventSource: null, pusher: null, pusherChannel: null };
+const state = { channels: [], activeChannel: null, members: [], user: null, mediaStream: null, muted: false, eventSource: null, poller: null, pusher: null, pusherChannel: null };
 let pendingAttachmentId = null;
 const toast = document.querySelector('#toast'); let toastTimer;
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 2200); }
@@ -71,7 +71,8 @@ async function selectChannel(channel) {
   document.querySelectorAll('.channel[data-channel-id]').forEach((item) => item.classList.toggle('active', Number(item.dataset.channelId) === channel.id));
   document.querySelector('#channel-name').textContent = channel.name; document.querySelector('#channel-description').textContent = channel.description; document.querySelector('#message-input').placeholder = `Message #${channel.name}`;
   if (state.pusher) { if (state.pusherChannel) state.pusher.unsubscribe(state.pusherChannel.name); state.pusherChannel = state.pusher.subscribe(`private-channel-${channel.id}`); state.pusherChannel.bind('message:new', () => loadMessages(channel)); }
-  state.eventSource?.close(); state.eventSource = new EventSource(`/api/events?channelId=${channel.id}`); state.eventSource.addEventListener('message', () => loadMessages(channel)); state.eventSource.addEventListener('notification', refreshNotifications);
+  state.eventSource?.close(); state.eventSource = null;
+  clearInterval(state.poller); if (!state.pusher) state.poller = setInterval(() => { if (document.visibilityState === 'visible') loadMessages(channel); }, 5000);
   await loadMessages(channel);
 }
 
