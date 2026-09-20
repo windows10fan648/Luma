@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
-    <script src="https://unpkg.com/lucide@latest"></script><script src="https://js.pusher.com/8.4.0/pusher.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script><script src="https://js.pusher.com/8.4.0/pusher.min.js"></script><script src="https://unpkg.com/livekit-client@2.15.6/dist/livekit-client.umd.min.js"></script>
     <style>
       svg { width: 16px; height: 16px; stroke-width: 2; vertical-align: middle; }
       .brand-mark svg { width: 21px; height: 21px; } .rail-icon svg { width: 18px; height: 18px; }
@@ -25,6 +25,9 @@
       .profile-backdrop { position: absolute; inset: 0; background: #070a12aa; backdrop-filter: blur(4px); } .profile-card { position: relative; width: min(340px, calc(100% - 32px)); border: 1px solid #35405a; border-radius: 16px; background: #1b2232; padding: 30px; text-align: center; box-shadow: 0 24px 70px #0008; }
       .profile-close { position: absolute; right: 14px; top: 12px; border: 0; background: transparent; color: #8190aa; font-size: 22px; cursor: pointer; } .profile-avatar { width: 64px; height: 64px; margin: 0 auto 14px; border-radius: 20px; display: grid; place-items: center; background: #b9a5ff; color: #28334b; font-weight: 700; font-size: 18px; } .profile-handle { color: #8290aa; font-size: 11px; margin: 0; } .profile-card h2 { font: 600 22px var(--display); margin: 5px 0; } .profile-status { color: #8fdcb9; font-size: 12px; margin: 8px 0 22px; } .profile-actions button { width: 100%; border: 0; border-radius: 8px; padding: 11px; background: #7667de; color: white; font-weight: 700; cursor: pointer; } .profile-actions button.secondary { background: #2a3449; color: #c2c9d8; margin-top: 8px; }
       @media (max-width:1100px) { .member-sidebar.member-sidebar-open { display: block; position: fixed; z-index: 5; right: 0; top: 0; bottom: 0; width: 246px; box-shadow: -12px 0 30px #0008; } }
+    </style>
+    <style>
+      .voice-modal{display:none;position:fixed;inset:0;z-index:25;align-items:center;justify-content:center;background:#070a12bb;backdrop-filter:blur(5px)}.voice-modal.open{display:flex}.voice-card{width:min(720px,calc(100% - 30px));min-height:410px;border:1px solid #394762;border-radius:16px;background:#171e2d;box-shadow:0 24px 80px #0009;padding:24px;display:flex;flex-direction:column}.voice-card-head{display:flex;align-items:center;justify-content:space-between}.voice-card-head h2{font:600 23px var(--display);margin:0}#voice-connection{color:var(--mint);font-size:11px}.video-grid{flex:1;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;padding:22px 0}.video-tile{min-height:150px;border-radius:12px;background:#0d121d;overflow:hidden;display:grid;place-items:center;color:#8b97ad;font-size:12px}.video-tile video{width:100%;height:100%;object-fit:cover}.voice-controls{display:flex;justify-content:center;gap:12px}.voice-controls button{width:43px;height:43px;border:0;border-radius:50%;background:#2a354b;color:#e6e8f0;cursor:pointer}.voice-controls button:hover{background:#465473}.voice-controls .leave-voice{background:#db665f}.voice-controls svg{width:18px;height:18px}
     </style>
   </head>
   <body>
@@ -83,6 +86,7 @@
       </aside>
     </div>
     <div class="profile-modal" id="profile-modal" aria-hidden="true"><div class="profile-backdrop" data-close-profile></div><section class="profile-card"><button class="profile-close" data-close-profile aria-label="Close profile">×</button><div class="profile-avatar" id="profile-avatar"></div><p class="profile-handle" id="profile-handle"></p><h2 id="profile-name"></h2><p class="profile-status" id="profile-status"></p><div class="profile-actions" id="profile-actions"></div></section></div>
+    <div class="voice-modal" id="voice-modal" aria-hidden="true"><section class="voice-card"><div class="voice-card-head"><div><p class="eyebrow">live room</p><h2 id="voice-room-name">Voice room</h2></div><span id="voice-connection">Connecting…</span></div><div class="video-grid" id="video-grid"></div><div class="voice-controls"><button id="voice-mic" aria-label="Mute microphone"><i data-lucide="mic"></i></button><button id="voice-camera" aria-label="Turn camera on"><i data-lucide="video"></i></button><button class="leave-voice" id="leave-voice" aria-label="Leave room"><i data-lucide="phone-off"></i></button></div></section></div>
     <div class="toast" id="toast" role="status"></div>
     <script src="/app.js"></script>
   </body>

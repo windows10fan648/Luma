@@ -4,6 +4,7 @@ const crypto = require('crypto');
 require('dotenv').config();
 const { initDatabase, query } = require('./db');
 const pusher = require('./realtime');
+const livekit = require('./livekit');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -76,6 +77,7 @@ app.post('/api/auth/logout', async (req, res) => { try { const token = cookies(r
 app.get('/api/auth/me', async (req, res) => { try { const user = await currentUser(req); if (!user) return res.status(401).json({ error: 'Not logged in.' }); res.json({ user }); } catch { res.status(503).json({ error: 'Database unavailable.' }); } });
 app.get('/api/realtime/config', requireAuth, (_req, res) => { res.json({ enabled: pusher.configured(), key: process.env.PUSHER_KEY || null, cluster: process.env.PUSHER_CLUSTER || null }); });
 app.post('/api/realtime/auth', requireAuth, (req, res) => { const channel = String(req.body.channel_name || ''); if (!channel.startsWith('private-')) return res.status(403).json({ error: 'Private channels only.' }); res.json(pusher.auth(String(req.body.socket_id || ''), channel)); });
+app.post('/api/livekit/token', requireAuth, requireMember, async (req, res) => { if (!process.env.LIVEKIT_URL || !process.env.LIVEKIT_API_KEY || !process.env.LIVEKIT_API_SECRET) return res.status(503).json({ error: 'LiveKit is not configured.' }); const channelId = Number(req.body.channelId); if (!channelId) return res.status(400).json({ error: 'A voice channel is required.' }); const room = `luma-channel-${channelId}`; res.json({ url: process.env.LIVEKIT_URL, token: livekit.token(String(req.user.id), room), room }); });
 
 app.get('/api/invites/:code', async (req, res) => {
   try { const [invite] = await query('SELECT workspace_id, expires_at FROM workspace_invites WHERE code = ? AND expires_at > NOW()', [req.params.code]); if (!invite) return res.status(404).json({ error: 'Invite expired or invalid.' }); const [workspace] = await query('SELECT id, name FROM workspaces WHERE id = ?', [invite.workspace_id]); res.json({ workspace }); } catch { res.status(503).json({ error: 'Unable to check invite.' }); }
