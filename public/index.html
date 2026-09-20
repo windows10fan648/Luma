@@ -17,6 +17,9 @@
       .hash { width: 17px; height: 17px; } .speaker { width: 15px; height: 15px; }
       .compose-add svg { width: 18px; height: 18px; } .send-button svg { width: 16px; height: 16px; }
       .empty-state { color: #7d88a0; text-align: center; padding: 48px 0; font-size: 12px; }
+      .message-tools { display: inline-flex; gap: 3px; margin-left: 8px; opacity: 0; transition: opacity .15s; }
+      .message:hover .message-tools { opacity: 1; } .message-tools button { border: 0; border-radius: 4px; background: #2b3347; color: #9ca6bb; cursor: pointer; width: 22px; height: 20px; }
+      .message-tools button:hover { color: #fff; background: #4a5571; }
     </style>
   </head>
   <body>

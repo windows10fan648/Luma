@@ -72,12 +72,28 @@ app.get('/api/workspace', requireAuth, async (req, res) => {
   }
 });
 
+app.post('/api/channels', requireAuth, async (req, res) => {
+  const name = String(req.body.name || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 40);
+  if (!name) return res.status(400).json({ error: 'Channel name is required.' });
+  try {
+    const [workspace] = await query('SELECT id FROM workspaces LIMIT 1');
+    const [position] = await query('SELECT COALESCE(MAX(position), -1) + 1 AS next_position FROM channels WHERE workspace_id = ?', [workspace.id]);
+    const result = await query('INSERT INTO channels (workspace_id, name, description, type, position) VALUES (?, ?, ?, ?, ?)', [workspace.id, name, String(req.body.description || ''), 'text', position.next_position]);
+    res.status(201).json({ id: result.insertId, name, description: String(req.body.description || ''), type: 'text', position: position.next_position });
+  } catch (error) { if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'That channel already exists.' }); console.error(error); res.status(503).json({ error: 'Unable to create channel.' }); }
+});
+
+app.delete('/api/channels/:channelId', requireAuth, async (req, res) => {
+  try { await query('DELETE FROM channels WHERE id = ?', [req.params.channelId]); res.json({ ok: true }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to delete channel.' }); }
+});
+
 app.get('/api/channels/:channelId/messages', requireAuth, async (req, res) => {
   try {
     const messages = await query(`
-      SELECT messages.id, messages.content, messages.created_at, users.username, users.display_name
+      SELECT messages.id, messages.author_id, messages.content, messages.parent_id, messages.edited_at, messages.created_at, users.username, users.display_name,
+        (SELECT COUNT(*) FROM message_reactions WHERE message_reactions.message_id = messages.id) AS reaction_count
       FROM messages JOIN users ON users.id = messages.author_id
-      WHERE messages.channel_id = ? ORDER BY messages.created_at ASC LIMIT 100
+      WHERE messages.channel_id = ? AND messages.deleted_at IS NULL ORDER BY messages.created_at ASC LIMIT 100
     `, [req.params.channelId]);
     res.json(messages);
   } catch (error) {
@@ -92,12 +108,31 @@ app.post('/api/channels/:channelId/messages', requireAuth, async (req, res) => {
   try {
     const user = req.user;
     const result = await query('INSERT INTO messages (channel_id, author_id, content) VALUES (?, ?, ?)', [req.params.channelId, user.id, content]);
-    const [message] = await query('SELECT id, content, created_at, ? AS username, ? AS display_name FROM messages WHERE id = ?', [user.username, user.display_name, result.insertId]);
+    const [message] = await query('SELECT id, author_id, content, parent_id, edited_at, created_at, ? AS username, ? AS display_name, 0 AS reaction_count FROM messages WHERE id = ?', [user.username, user.display_name, result.insertId]);
     res.status(201).json(message);
   } catch (error) {
     console.error(error);
     res.status(503).json({ error: 'Unable to send message.' });
   }
+});
+
+app.patch('/api/messages/:messageId', requireAuth, async (req, res) => {
+  const content = String(req.body.content || '').trim();
+  if (!content || content.length > 2000) return res.status(400).json({ error: 'Message must be between 1 and 2000 characters.' });
+  try { const result = await query('UPDATE messages SET content = ?, edited_at = NOW() WHERE id = ? AND author_id = ? AND deleted_at IS NULL', [content, req.params.messageId, req.user.id]); if (!result.affectedRows) return res.status(403).json({ error: 'You can only edit your own messages.' }); res.json({ ok: true }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to edit message.' }); }
+});
+
+app.delete('/api/messages/:messageId', requireAuth, async (req, res) => {
+  try { const result = await query('UPDATE messages SET deleted_at = NOW() WHERE id = ? AND author_id = ?', [req.params.messageId, req.user.id]); if (!result.affectedRows) return res.status(403).json({ error: 'You can only delete your own messages.' }); res.json({ ok: true }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to delete message.' }); }
+});
+
+app.post('/api/messages/:messageId/reactions', requireAuth, async (req, res) => {
+  const emoji = String(req.body.emoji || '').trim().slice(0, 32); if (!emoji) return res.status(400).json({ error: 'Emoji is required.' });
+  try { const existing = await query('SELECT message_id FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?', [req.params.messageId, req.user.id, emoji]); if (existing.length) await query('DELETE FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?', [req.params.messageId, req.user.id, emoji]); else await query('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)', [req.params.messageId, req.user.id, emoji]); const [count] = await query('SELECT COUNT(*) AS count FROM message_reactions WHERE message_id = ?', [req.params.messageId]); res.json({ active: !existing.length, count: count.count }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to update reaction.' }); }
+});
+
+app.post('/api/invites', requireAuth, async (req, res) => {
+  try { const [workspace] = await query('SELECT id FROM workspaces LIMIT 1'); const code = crypto.randomBytes(16).toString('hex'); await query('INSERT INTO workspace_invites (code, workspace_id, created_by, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))', [code, workspace.id, req.user.id]); res.status(201).json({ code, url: `/auth?invite=${code}` }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to create invite.' }); }
 });
 
 app.get('/api/health', (_req, res) => {

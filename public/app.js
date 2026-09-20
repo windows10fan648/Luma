@@ -1,5 +1,5 @@
 if (window.lucide) lucide.createIcons();
-const state = { channels: [], activeChannel: null, members: [] };
+const state = { channels: [], activeChannel: null, members: [], user: null };
 const toast = document.querySelector('#toast'); let toastTimer;
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 2200); }
 function initials(name) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(); }
@@ -36,8 +36,12 @@ function renderMembers() {
 
 function renderMessage(message) {
   const article = document.createElement('article'); article.className = 'message'; const author = message.display_name || message.username;
-  article.innerHTML = `<div class="avatar ${avatarClass(author)}">${initials(author)}</div><div class="message-content"><div class="message-meta"><strong></strong><time></time></div><p></p></div>`;
+  const ownActions = state.user && Number(message.author_id) === Number(state.user.id) ? '<div class="message-tools"><button data-edit title="Edit message">✎</button><button data-delete title="Delete message">×</button></div>' : '';
+  article.innerHTML = `<div class="avatar ${avatarClass(author)}">${initials(author)}</div><div class="message-content"><div class="message-meta"><strong></strong><time></time>${message.edited_at ? '<span>(edited)</span>' : ''}</div><p></p><div class="reaction-row"><button class="reaction" data-react="✨">✨ <span>${message.reaction_count || 0}</span></button>${ownActions}</div></div>`;
   article.querySelector('strong').textContent = author; article.querySelector('time').textContent = new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); article.querySelector('p').textContent = message.content;
+  article.querySelector('[data-react]')?.addEventListener('click', async (event) => { const response = await fetch(`/api/messages/${message.id}/reactions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emoji: '✨' }) }); if (response.ok) event.currentTarget.querySelector('span').textContent = (await response.json()).count; });
+  article.querySelector('[data-edit]')?.addEventListener('click', async () => { const content = window.prompt('Edit your message', message.content); if (!content || content.trim() === message.content) return; const response = await fetch(`/api/messages/${message.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) }); if (response.ok) loadMessages(state.activeChannel); else showToast('Unable to edit message'); });
+  article.querySelector('[data-delete]')?.addEventListener('click', async () => { if (!window.confirm('Delete this message?')) return; const response = await fetch(`/api/messages/${message.id}`, { method: 'DELETE' }); if (response.ok) article.remove(); else showToast('Unable to delete message'); });
   return article;
 }
 
@@ -65,14 +69,15 @@ document.querySelector('#composer').addEventListener('submit', async (event) => 
 });
 document.querySelector('.emoji-trigger').addEventListener('click', () => { const input = document.querySelector('#message-input'); input.value += ' ✨'; input.focus(); });
 document.querySelector('.compose-add').addEventListener('click', () => showToast('Attachments are coming soon'));
-document.querySelectorAll('.add-server, .tiny-plus').forEach((button) => button.addEventListener('click', () => showToast('Workspace tools are coming soon')));
+document.querySelector('.add-server').addEventListener('click', async () => { const name = window.prompt('Name your new workspace'); if (name) showToast('Workspace creation is next on the roadmap'); });
+document.querySelectorAll('.tiny-plus').forEach((button) => button.addEventListener('click', async () => { const name = window.prompt('New text channel name'); if (!name) return; const response = await fetch('/api/channels', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }); const data = await response.json(); if (!response.ok) return showToast(data.error); state.channels.push(data); renderChannels(); await selectChannel(data); }));
 document.querySelector('#logout').addEventListener('click', async () => { await fetch('/api/auth/logout', { method: 'POST' }); window.location.href = '/auth'; });
 
 async function boot() {
   try {
     const auth = await fetch('/api/auth/me');
     if (!auth.ok) { window.location.href = '/auth'; return; }
-    const authData = await auth.json();
+    const authData = await auth.json(); state.user = authData.user;
     const response = await fetch('/api/workspace'); if (!response.ok) throw new Error(); const data = await response.json(); state.channels = data.channels; state.members = data.members;
     document.querySelector('.workspace-head h1').textContent = data.workspace.name; document.querySelector('.member-head h2 span').textContent = data.members.length; renderChannels(); renderMembers(); await selectChannel(state.channels.find((channel) => channel.name === 'general') || state.channels[0]);
     document.querySelector('.user-copy strong').textContent = authData.user.display_name;
@@ -80,3 +85,4 @@ async function boot() {
   } catch { document.querySelector('#message-list').innerHTML = '<p class="empty-state">Connect your database to load this workspace.</p>'; showToast('Workspace could not be loaded'); }
 }
 boot();
+setInterval(() => { if (state.activeChannel && document.visibilityState === 'visible') loadMessages(state.activeChannel); }, 5000);

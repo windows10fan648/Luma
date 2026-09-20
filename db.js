@@ -29,7 +29,8 @@ async function initDatabase() {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           )
         `);
-        try { await connection.query('ALTER TABLE users ADD COLUMN email VARCHAR(255) UNIQUE'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
+        try { await connection.query('ALTER TABLE users ADD COLUMN email VARCHAR(255)'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
+        try { await connection.query('CREATE UNIQUE INDEX users_email_unique ON users (email)'); } catch (error) { if (!String(error.message).toLowerCase().includes('already exists') && error.code !== 'ER_DUP_KEYNAME') throw error; }
         try { await connection.query('ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
         await connection.query(`
           CREATE TABLE IF NOT EXISTS workspaces (
@@ -59,10 +60,37 @@ async function initDatabase() {
             channel_id INT NOT NULL,
             author_id INT NOT NULL,
             content TEXT NOT NULL,
+            parent_id BIGINT NULL,
+            edited_at DATETIME NULL,
+            deleted_at DATETIME NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (channel_id) REFERENCES channels(id),
             FOREIGN KEY (author_id) REFERENCES users(id),
             INDEX channel_messages (channel_id, created_at)
+          )
+        `);
+        try { await connection.query('ALTER TABLE messages ADD COLUMN parent_id BIGINT NULL'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
+        try { await connection.query('ALTER TABLE messages ADD COLUMN edited_at DATETIME NULL'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
+        try { await connection.query('ALTER TABLE messages ADD COLUMN deleted_at DATETIME NULL'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS message_reactions (
+            message_id BIGINT NOT NULL,
+            user_id INT NOT NULL,
+            emoji VARCHAR(32) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (message_id, user_id, emoji),
+            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          )
+        `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS workspace_invites (
+            code CHAR(32) PRIMARY KEY,
+            workspace_id INT NOT NULL,
+            created_by INT NOT NULL,
+            expires_at DATETIME NOT NULL,
+            FOREIGN KEY (workspace_id) REFERENCES workspaces(id),
+            FOREIGN KEY (created_by) REFERENCES users(id)
           )
         `);
         await connection.query(`
