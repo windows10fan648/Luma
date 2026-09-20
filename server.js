@@ -91,6 +91,11 @@ app.get('/api/workspace', requireAuth, requireMember, async (req, res) => {
     res.status(503).json({ error: 'Database unavailable. Check your environment variables.' });
   }
 });
+app.post('/api/workspaces', requireAuth, async (req, res) => {
+  const name = String(req.body.name || '').trim().slice(0, 80);
+  if (name.length < 2) return res.status(400).json({ error: 'Workspace name must be at least 2 characters.' });
+  try { const result = await query('INSERT INTO workspaces (name, owner_id) VALUES (?, ?)', [name, req.user.id]); await query('INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)', [result.insertId, req.user.id, 'owner']); const channel = await query('INSERT INTO channels (workspace_id, name, description, type, position) VALUES (?, ?, ?, ?, ?)', [result.insertId, 'general', 'Start the conversation', 'text', 0]); res.status(201).json({ id: result.insertId, name, channelId: channel.insertId }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to create workspace.' }); }
+});
 
 app.get('/api/workspace/members', requireAuth, requireMember, async (req, res) => { res.json(await query('SELECT users.id, username, display_name, status, workspace_members.role, workspace_members.banned_until FROM users JOIN workspace_members ON workspace_members.user_id = users.id WHERE workspace_members.workspace_id = ?', [req.membership.workspace_id])); });
 app.patch('/api/workspace/members/:userId/role', requireAuth, requireMember, async (req, res) => { if (!canModerate(req.membership.role)) return res.status(403).json({ error: 'Moderator permission required.' }); const role = ['admin', 'moderator', 'member'].includes(req.body.role) ? req.body.role : null; if (!role) return res.status(400).json({ error: 'Invalid role.' }); await query('UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?', [role, req.membership.workspace_id, req.params.userId]); res.json({ ok: true }); });
@@ -106,6 +111,44 @@ app.get('/api/uploads/:id', async (req, res) => { try { const [file] = await que
 
 app.get('/api/notifications', requireAuth, async (req, res) => { res.json(await query('SELECT id, type, title, body, link, read_at, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 30', [req.user.id])); });
 app.patch('/api/notifications/:id/read', requireAuth, async (req, res) => { await query('UPDATE notifications SET read_at = NOW() WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]); res.json({ ok: true }); });
+
+app.get('/api/users/:userId/profile', requireAuth, async (req, res) => {
+  try {
+    const [user] = await query('SELECT id, username, display_name, status, created_at FROM users WHERE id = ? AND password_hash IS NOT NULL', [req.params.userId]);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+    if (Number(user.id) === Number(req.user.id)) return res.json({ user, relationship: 'self' });
+    const [friendship] = await query('SELECT user_id FROM friendships WHERE user_id = ? AND friend_id = ?', [req.user.id, user.id]);
+    if (friendship) return res.json({ user, relationship: 'friends' });
+    const [outgoing] = await query('SELECT id FROM friend_requests WHERE requester_id = ? AND addressee_id = ? AND status = \'pending\'', [req.user.id, user.id]);
+    if (outgoing) return res.json({ user, relationship: 'outgoing', requestId: outgoing.id });
+    const [incoming] = await query('SELECT id FROM friend_requests WHERE requester_id = ? AND addressee_id = ? AND status = \'pending\'', [user.id, req.user.id]);
+    res.json({ user, relationship: incoming ? 'incoming' : 'none', requestId: incoming?.id });
+  } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to load profile.' }); }
+});
+
+app.get('/api/friends', requireAuth, async (req, res) => { res.json(await query('SELECT users.id, users.username, users.display_name, users.status FROM friendships JOIN users ON users.id = friendships.friend_id WHERE friendships.user_id = ? ORDER BY users.display_name', [req.user.id])); });
+app.get('/api/friend-requests', requireAuth, async (req, res) => { res.json(await query(`SELECT friend_requests.id, friend_requests.status, friend_requests.created_at, requester.id AS requester_id, requester.username AS requester_username, requester.display_name AS requester_name, addressee.id AS addressee_id, addressee.username AS addressee_username, addressee.display_name AS addressee_name FROM friend_requests JOIN users requester ON requester.id = requester_id JOIN users addressee ON addressee.id = addressee_id WHERE requester_id = ? OR addressee_id = ? ORDER BY friend_requests.created_at DESC`, [req.user.id, req.user.id])); });
+app.post('/api/friend-requests', requireAuth, async (req, res) => {
+  const addresseeId = Number(req.body.userId); if (!addresseeId || addresseeId === Number(req.user.id)) return res.status(400).json({ error: 'Choose another user.' });
+  try {
+    const [target] = await query('SELECT id, display_name FROM users WHERE id = ? AND password_hash IS NOT NULL', [addresseeId]); if (!target) return res.status(404).json({ error: 'User not found.' });
+    if ((await query('SELECT user_id FROM friendships WHERE user_id = ? AND friend_id = ?', [req.user.id, addresseeId])).length) return res.status(409).json({ error: 'You are already friends.' });
+    if ((await query('SELECT id FROM friend_requests WHERE ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)) AND status = \'pending\'', [req.user.id, addresseeId, addresseeId, req.user.id])).length) return res.status(409).json({ error: 'A friend request is already pending.' });
+    const result = await query('INSERT INTO friend_requests (requester_id, addressee_id) VALUES (?, ?)', [req.user.id, addresseeId]);
+    await query('INSERT INTO notifications (user_id, type, title, body, link) VALUES (?, ?, ?, ?, ?)', [addresseeId, 'friend_request', 'New friend request', `${req.user.display_name} wants to connect with you`, '/']);
+    res.status(201).json({ id: result.insertId, relationship: 'outgoing' });
+  } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to send friend request.' }); }
+});
+app.patch('/api/friend-requests/:requestId', requireAuth, async (req, res) => {
+  const action = req.body.action; if (!['accepted', 'declined'].includes(action)) return res.status(400).json({ error: 'Choose accept or decline.' });
+  try {
+    const [request] = await query('SELECT id, requester_id, addressee_id FROM friend_requests WHERE id = ? AND addressee_id = ? AND status = \'pending\'', [req.params.requestId, req.user.id]); if (!request) return res.status(404).json({ error: 'Friend request not found.' });
+    await query('UPDATE friend_requests SET status = ? WHERE id = ?', [action, request.id]);
+    if (action === 'accepted') { await query('INSERT IGNORE INTO friendships (user_id, friend_id) VALUES (?, ?)', [request.requester_id, request.addressee_id]); await query('INSERT IGNORE INTO friendships (user_id, friend_id) VALUES (?, ?)', [request.addressee_id, request.requester_id]); }
+    await query('INSERT INTO notifications (user_id, type, title, body, link) VALUES (?, ?, ?, ?, ?)', [request.requester_id, 'friend_request', action === 'accepted' ? 'Friend request accepted' : 'Friend request declined', `${req.user.display_name} ${action === 'accepted' ? 'accepted' : 'declined'} your friend request`, '/']);
+    res.json({ ok: true, relationship: action === 'accepted' ? 'friends' : 'none' });
+  } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to update friend request.' }); }
+});
 
 app.post('/api/channels', requireAuth, requireMember, async (req, res) => {
   const name = String(req.body.name || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 40);

@@ -143,6 +143,29 @@ async function initDatabase() {
           )
         `);
         await connection.query(`
+          CREATE TABLE IF NOT EXISTS friend_requests (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            requester_id INT NOT NULL,
+            addressee_id INT NOT NULL,
+            status ENUM('pending', 'accepted', 'declined', 'canceled') NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (requester_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (addressee_id) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX request_pair (requester_id, addressee_id, status)
+          )
+        `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS friendships (
+            user_id INT NOT NULL,
+            friend_id INT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, friend_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (friend_id) REFERENCES users(id) ON DELETE CASCADE
+          )
+        `);
+        await connection.query(`
           CREATE TABLE IF NOT EXISTS voice_signals (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
             channel_id INT NOT NULL,

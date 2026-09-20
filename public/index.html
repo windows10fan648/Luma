@@ -21,6 +21,10 @@
       .message:hover .message-tools { opacity: 1; } .message-tools button { border: 0; border-radius: 4px; background: #2b3347; color: #9ca6bb; cursor: pointer; width: 22px; height: 20px; }
       .message-tools button:hover { color: #fff; background: #4a5571; }
       .attachment-link { display: inline-block; margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: #232c40; color: #bdb3ff; font-size: 11px; text-decoration: none; }
+      .profile-modal { display: none; position: fixed; inset: 0; z-index: 20; align-items: center; justify-content: center; } .profile-modal.open { display: flex; }
+      .profile-backdrop { position: absolute; inset: 0; background: #070a12aa; backdrop-filter: blur(4px); } .profile-card { position: relative; width: min(340px, calc(100% - 32px)); border: 1px solid #35405a; border-radius: 16px; background: #1b2232; padding: 30px; text-align: center; box-shadow: 0 24px 70px #0008; }
+      .profile-close { position: absolute; right: 14px; top: 12px; border: 0; background: transparent; color: #8190aa; font-size: 22px; cursor: pointer; } .profile-avatar { width: 64px; height: 64px; margin: 0 auto 14px; border-radius: 20px; display: grid; place-items: center; background: #b9a5ff; color: #28334b; font-weight: 700; font-size: 18px; } .profile-handle { color: #8290aa; font-size: 11px; margin: 0; } .profile-card h2 { font: 600 22px var(--display); margin: 5px 0; } .profile-status { color: #8fdcb9; font-size: 12px; margin: 8px 0 22px; } .profile-actions button { width: 100%; border: 0; border-radius: 8px; padding: 11px; background: #7667de; color: white; font-weight: 700; cursor: pointer; } .profile-actions button.secondary { background: #2a3449; color: #c2c9d8; margin-top: 8px; }
+      @media (max-width:1100px) { .member-sidebar.member-sidebar-open { display: block; position: fixed; z-index: 5; right: 0; top: 0; bottom: 0; width: 246px; box-shadow: -12px 0 30px #0008; } }
     </style>
   </head>
   <body>
@@ -77,6 +81,7 @@
         <div id="member-list"></div>
       </aside>
     </div>
+    <div class="profile-modal" id="profile-modal" aria-hidden="true"><div class="profile-backdrop" data-close-profile></div><section class="profile-card"><button class="profile-close" data-close-profile aria-label="Close profile">×</button><div class="profile-avatar" id="profile-avatar"></div><p class="profile-handle" id="profile-handle"></p><h2 id="profile-name"></h2><p class="profile-status" id="profile-status"></p><div class="profile-actions" id="profile-actions"></div></section></div>
     <div class="toast" id="toast" role="status"></div>
     <script src="/app.js"></script>
   </body>
