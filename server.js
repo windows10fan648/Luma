@@ -3,6 +3,7 @@ const express = require('express');
 const crypto = require('crypto');
 require('dotenv').config();
 const { initDatabase, query } = require('./db');
+const pusher = require('./realtime');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -73,6 +74,8 @@ app.post('/api/auth/login', async (req, res) => {
 });
 app.post('/api/auth/logout', async (req, res) => { try { const token = cookies(req).luma_session; if (token) await query('DELETE FROM sessions WHERE token = ?', [token]); } catch (error) { console.error(error); } res.setHeader('Set-Cookie', 'luma_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({ ok: true }); });
 app.get('/api/auth/me', async (req, res) => { try { const user = await currentUser(req); if (!user) return res.status(401).json({ error: 'Not logged in.' }); res.json({ user }); } catch { res.status(503).json({ error: 'Database unavailable.' }); } });
+app.get('/api/realtime/config', requireAuth, (_req, res) => { res.json({ enabled: pusher.configured(), key: process.env.PUSHER_KEY || null, cluster: process.env.PUSHER_CLUSTER || null }); });
+app.post('/api/realtime/auth', requireAuth, (req, res) => { const channel = String(req.body.channel_name || ''); if (!channel.startsWith('private-')) return res.status(403).json({ error: 'Private channels only.' }); res.json(pusher.auth(String(req.body.socket_id || ''), channel)); });
 
 app.get('/api/invites/:code', async (req, res) => {
   try { const [invite] = await query('SELECT workspace_id, expires_at FROM workspace_invites WHERE code = ? AND expires_at > NOW()', [req.params.code]); if (!invite) return res.status(404).json({ error: 'Invite expired or invalid.' }); const [workspace] = await query('SELECT id, name FROM workspaces WHERE id = ?', [invite.workspace_id]); res.json({ workspace }); } catch { res.status(503).json({ error: 'Unable to check invite.' }); }
@@ -158,6 +161,7 @@ app.post('/api/friend-requests', requireAuth, async (req, res) => {
     if ((await query('SELECT id FROM friend_requests WHERE ((requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)) AND status = \'pending\'', [req.user.id, addresseeId, addresseeId, req.user.id])).length) return res.status(409).json({ error: 'A friend request is already pending.' });
     const result = await query('INSERT INTO friend_requests (requester_id, addressee_id) VALUES (?, ?)', [req.user.id, addresseeId]);
     await query('INSERT INTO notifications (user_id, type, title, body, link) VALUES (?, ?, ?, ?, ?)', [addresseeId, 'friend_request', 'New friend request', `${req.user.display_name} wants to connect with you`, '/']);
+    await pusher.trigger(`private-user-${addresseeId}`, 'friend-request:new', { requestId: result.insertId, from: req.user.id });
     res.status(201).json({ id: result.insertId, relationship: 'outgoing' });
   } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to send friend request.' }); }
 });
@@ -189,7 +193,7 @@ app.get('/api/dms/:userId/messages', requireAuth, async (req, res) => {
 });
 app.post('/api/dms/:userId/messages', requireAuth, async (req, res) => {
   const otherId = Number(req.params.userId); const content = String(req.body.content || '').trim(); if (!otherId || !content || content.length > 2000) return res.status(400).json({ error: 'Invalid direct message.' });
-  try { const [other] = await query('SELECT id FROM users WHERE id = ? AND password_hash IS NOT NULL', [otherId]); if (!other) return res.status(404).json({ error: 'User not found.' }); const conversationId = await getDmConversation(req.user.id, otherId); const result = await query('INSERT INTO direct_messages (conversation_id, author_id, content) VALUES (?, ?, ?)', [conversationId, req.user.id, content]); await query('INSERT INTO notifications (user_id, type, title, body, link) VALUES (?, ?, ?, ?, ?)', [otherId, 'dm', `Message from ${req.user.display_name}`, content.slice(0, 120), '/friends']); res.status(201).json({ id: result.insertId, content, author_id: req.user.id, display_name: req.user.display_name, username: req.user.username, created_at: new Date().toISOString() }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to send direct message.' }); }
+  try { const [other] = await query('SELECT id FROM users WHERE id = ? AND password_hash IS NOT NULL', [otherId]); if (!other) return res.status(404).json({ error: 'User not found.' }); const conversationId = await getDmConversation(req.user.id, otherId); const result = await query('INSERT INTO direct_messages (conversation_id, author_id, content) VALUES (?, ?, ?)', [conversationId, req.user.id, content]); await query('INSERT INTO notifications (user_id, type, title, body, link) VALUES (?, ?, ?, ?, ?)', [otherId, 'dm', `Message from ${req.user.display_name}`, content.slice(0, 120), '/friends']); await pusher.trigger(`private-user-${otherId}`, 'dm:new', { userId: req.user.id, messageId: result.insertId }); res.status(201).json({ id: result.insertId, content, author_id: req.user.id, display_name: req.user.display_name, username: req.user.username, created_at: new Date().toISOString() }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to send direct message.' }); }
 });
 
 app.post('/api/channels', requireAuth, requireMember, async (req, res) => {
@@ -232,6 +236,7 @@ app.post('/api/channels/:channelId/messages', requireAuth, requireMember, async 
     const [message] = await query('SELECT id, author_id, content, parent_id, edited_at, created_at, ? AS username, ? AS display_name, attachment_id, 0 AS reaction_count FROM messages WHERE id = ?', [user.username, user.display_name, result.insertId]);
     const recipients = await query('SELECT user_id FROM workspace_members WHERE workspace_id = ? AND user_id != ?', [req.membership.workspace_id, user.id]);
     for (const recipient of recipients) await query('INSERT INTO notifications (user_id, type, title, body, link) VALUES (?, ?, ?, ?, ?)', [recipient.user_id, 'message', `New message from ${user.display_name}`, content.slice(0, 120), `/`]);
+    await pusher.trigger(`private-channel-${req.params.channelId}`, 'message:new', { channelId: Number(req.params.channelId), messageId: result.insertId });
     res.status(201).json(message);
   } catch (error) {
     console.error(error);

@@ -1,5 +1,5 @@
 if (window.lucide) lucide.createIcons();
-const state = { channels: [], activeChannel: null, members: [], user: null, mediaStream: null, muted: false, eventSource: null };
+const state = { channels: [], activeChannel: null, members: [], user: null, mediaStream: null, muted: false, eventSource: null, pusher: null, pusherChannel: null };
 let pendingAttachmentId = null;
 const toast = document.querySelector('#toast'); let toastTimer;
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 2200); }
@@ -70,6 +70,7 @@ async function selectChannel(channel) {
   if (!channel) return; state.activeChannel = channel;
   document.querySelectorAll('.channel[data-channel-id]').forEach((item) => item.classList.toggle('active', Number(item.dataset.channelId) === channel.id));
   document.querySelector('#channel-name').textContent = channel.name; document.querySelector('#channel-description').textContent = channel.description; document.querySelector('#message-input').placeholder = `Message #${channel.name}`;
+  if (state.pusher) { if (state.pusherChannel) state.pusher.unsubscribe(state.pusherChannel.name); state.pusherChannel = state.pusher.subscribe(`private-channel-${channel.id}`); state.pusherChannel.bind('message:new', () => loadMessages(channel)); }
   state.eventSource?.close(); state.eventSource = new EventSource(`/api/events?channelId=${channel.id}`); state.eventSource.addEventListener('message', () => loadMessages(channel)); state.eventSource.addEventListener('notification', refreshNotifications);
   await loadMessages(channel);
 }
@@ -109,6 +110,7 @@ async function boot() {
     const auth = await fetch('/api/auth/me');
     if (!auth.ok) { window.location.href = '/auth'; return; }
     const authData = await auth.json(); state.user = authData.user;
+    const realtime = await fetch('/api/realtime/config'); const realtimeConfig = await realtime.json(); if (realtimeConfig.enabled && window.Pusher) { state.pusher = new Pusher(realtimeConfig.key, { cluster: realtimeConfig.cluster, forceTLS: true, authEndpoint: '/api/realtime/auth' }); const personal = state.pusher.subscribe(`private-user-${state.user.id}`); personal.bind('notification:new', refreshNotifications); personal.bind('dm:new', refreshNotifications); personal.bind('friend-request:new', refreshNotifications); }
     const response = await fetch('/api/workspace'); if (!response.ok) throw new Error(); const data = await response.json(); state.channels = data.channels; state.members = data.members;
     document.querySelector('.workspace-head h1').textContent = data.workspace.name; document.querySelector('.member-head h2 span').textContent = data.members.length; renderChannels(); renderMembers(); await selectChannel(state.channels.find((channel) => channel.name === 'general') || state.channels[0]);
     document.querySelector('.user-copy strong').textContent = authData.user.display_name;
