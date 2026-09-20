@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0e111a" />
+    <title>Luma — your space to connect</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+      svg { width: 16px; height: 16px; stroke-width: 2; vertical-align: middle; }
+      .brand-mark svg { width: 21px; height: 21px; } .rail-icon svg { width: 18px; height: 18px; }
+      .header-hash { width: 25px; height: 25px; } .welcome-symbol svg { width: 27px; height: 27px; }
+      .hash { width: 17px; height: 17px; } .speaker { width: 15px; height: 15px; }
+      .compose-add svg { width: 18px; height: 18px; } .send-button svg { width: 16px; height: 16px; }
+      .empty-state { color: #7d88a0; text-align: center; padding: 48px 0; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="server-rail" aria-label="Servers">
+        <button class="brand-mark active" aria-label="Luma home"><i data-lucide="sparkles"></i></button>
+        <div class="rail-rule"></div>
+        <button class="server-bubble violet" aria-label="Luma House">LH</button>
+        <button class="server-bubble add-server" aria-label="Add a server"><i data-lucide="plus"></i></button>
+        <div class="rail-spacer"></div>
+        <button class="rail-icon" aria-label="Discover"><i data-lucide="compass"></i></button>
+        <button class="rail-icon" aria-label="Help"><i data-lucide="circle-help"></i></button>
+      </aside>
+
+      <aside class="channel-sidebar">
+        <div class="workspace-head">
+          <div>
+            <p class="eyebrow">your workspace</p>
+            <h1>Luma House</h1>
+          </div>
+          <button class="icon-button" aria-label="Workspace options"><i data-lucide="chevron-down"></i></button>
+        </div>
+        <div class="sidebar-search"><i data-lucide="search"></i><input aria-label="Search channels" placeholder="Find a channel" /></div>
+
+        <nav class="channel-list" aria-label="Channels">
+          <p class="section-label">Text channels <button class="tiny-plus" aria-label="Add text channel"><i data-lucide="plus"></i></button></p>
+          <p class="section-label voice-label">Voice rooms <button class="tiny-plus" aria-label="Add voice room"><i data-lucide="plus"></i></button></p>
+        </nav>
+
+        <div class="user-card">
+          <div class="avatar user-avatar">YO<span class="status-dot"></span></div>
+          <div class="user-copy"><strong>you</strong><span>online</span></div>
+          <button class="user-action" aria-label="Mute"><i data-lucide="mic"></i></button>
+          <button class="user-action" id="logout" aria-label="Log out"><i data-lucide="log-out"></i></button>
+        </div>
+      </aside>
+
+      <main class="chat-panel">
+        <header class="chat-header">
+          <div class="channel-title"><i class="header-hash" data-lucide="hash"></i><div><h2 id="channel-name">general</h2><p id="channel-description">A cozy corner for everyday conversations</p></div></div>
+          <div class="header-actions"><button class="header-action" aria-label="Notifications"><i data-lucide="bell"></i></button><button class="header-action" aria-label="Pinned messages"><i data-lucide="pin"></i></button><button class="header-action" aria-label="Members"><i data-lucide="users"></i></button><div class="header-search"><input placeholder="Search" aria-label="Search messages" /><i data-lucide="search"></i></div><button class="header-action" aria-label="Inbox"><i data-lucide="inbox"></i></button><button class="header-action" aria-label="Help"><i data-lucide="circle-help"></i></button></div>
+        </header>
+
+        <section class="message-area" id="message-area" aria-live="polite">
+          <div class="channel-welcome"><div class="welcome-symbol"><i data-lucide="hash"></i></div><h3>Welcome to #general</h3><p>This is the beginning of this channel. Say hello to the room.</p></div>
+          <div id="message-list"></div>
+        </section>
+
+        <form class="composer" id="composer"><button type="button" class="compose-add" aria-label="Add attachment"><i data-lucide="plus"></i></button><input id="message-input" autocomplete="off" placeholder="Message #general" aria-label="Message channel" /><button type="button" class="compose-button" aria-label="Add gift"><i data-lucide="gift"></i></button><button type="button" class="compose-button emoji-trigger" aria-label="Add emoji"><i data-lucide="smile"></i></button><button class="send-button" aria-label="Send message"><i data-lucide="arrow-up"></i></button></form>
+      </main>
+
+      <aside class="member-sidebar">
+        <div class="member-head"><h2>Members <span>8</span></h2><button class="icon-button" aria-label="Close member list"><i data-lucide="x"></i></button></div>
+        <div id="member-list"></div>
+      </aside>
+    </div>
+    <div class="toast" id="toast" role="status"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
