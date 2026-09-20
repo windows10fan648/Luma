@@ -11,10 +11,16 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '8mb' }));
 app.use(express.urlencoded({ extended: false }));
+const rateBuckets = new Map();
+function rateLimit(max, windowMs) { return (req, res, next) => { const key = `${req.ip}:${req.baseUrl}`; const now = Date.now(); const bucket = rateBuckets.get(key); if (!bucket || now - bucket.started > windowMs) rateBuckets.set(key, { started: now, count: 1 }); else if (++bucket.count > max) return res.status(429).json({ error: 'Too many requests. Please try again shortly.' }); next(); }; }
+app.use('/api/auth', rateLimit(30, 60_000)); app.use('/api/uploads', rateLimit(20, 60_000));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/auth', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'auth.html')));
 app.get('/reset-password', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'reset.html')));
 app.get('/friends', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'friends.html')));
+app.get('/moderation', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'moderation.html')));
+app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
+app.get('/terms', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   return `${salt}:${crypto.scryptSync(password, salt, 64).toString('hex')}`;
@@ -80,6 +86,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 app.post('/api/auth/forgot-password', async (req, res) => { const email = String(req.body.email || '').trim().toLowerCase(); if (!email) return res.status(400).json({ error: 'Email is required.' }); try { if (!supabase.configured()) return res.status(503).json({ error: 'Password recovery is not configured.' }); const redirectTo = `${process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`}/reset-password`; await supabase.request('/recover', { method: 'POST', body: JSON.stringify({ email, redirect_to: redirectTo }) }); res.json({ ok: true }); } catch { res.json({ ok: true }); } });
 app.post('/api/auth/reset-password', async (req, res) => { const password = String(req.body.password || ''); const accessToken = String(req.body.accessToken || ''); if (password.length < 8 || !accessToken) return res.status(400).json({ error: 'A valid recovery session and password are required.' }); try { await supabase.request('/user', { method: 'PUT', body: JSON.stringify({ password }) }, accessToken); res.json({ ok: true }); } catch (error) { res.status(400).json({ error: error.message }); } });
+app.delete('/api/account', requireAuth, async (req, res) => { if (req.body.confirm !== 'DELETE') return res.status(400).json({ error: 'Type DELETE to confirm account removal.' }); try { await query('DELETE FROM sessions WHERE user_id = ?', [req.user.id]); await query('DELETE FROM workspace_members WHERE user_id = ?', [req.user.id]); await query('UPDATE users SET username = CONCAT(\'deleted_\', id), display_name = \'Deleted user\', email = NULL, password_hash = NULL, supabase_id = NULL, status = \'offline\' WHERE id = ?', [req.user.id]); res.setHeader('Set-Cookie', 'luma_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({ ok: true }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to delete account.' }); } });
 app.post('/api/auth/logout', async (req, res) => { try { const token = cookies(req).luma_session; if (token) await query('DELETE FROM sessions WHERE token = ?', [token]); } catch (error) { console.error(error); } res.setHeader('Set-Cookie', 'luma_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({ ok: true }); });
 app.get('/api/auth/me', async (req, res) => { try { const user = await currentUser(req); if (!user) return res.status(401).json({ error: 'Not logged in.' }); res.json({ user }); } catch { res.status(503).json({ error: 'Database unavailable.' }); } });
 app.get('/api/realtime/config', requireAuth, (_req, res) => { res.json({ enabled: pusher.configured(), key: process.env.PUSHER_KEY || null, cluster: process.env.PUSHER_CLUSTER || null }); });
