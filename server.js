@@ -10,6 +10,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '8mb' }));
+app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/auth', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'auth.html')));
 app.get('/friends', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'friends.html')));
@@ -76,7 +77,7 @@ app.post('/api/auth/login', async (req, res) => {
 app.post('/api/auth/logout', async (req, res) => { try { const token = cookies(req).luma_session; if (token) await query('DELETE FROM sessions WHERE token = ?', [token]); } catch (error) { console.error(error); } res.setHeader('Set-Cookie', 'luma_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({ ok: true }); });
 app.get('/api/auth/me', async (req, res) => { try { const user = await currentUser(req); if (!user) return res.status(401).json({ error: 'Not logged in.' }); res.json({ user }); } catch { res.status(503).json({ error: 'Database unavailable.' }); } });
 app.get('/api/realtime/config', requireAuth, (_req, res) => { res.json({ enabled: pusher.configured(), key: process.env.PUSHER_KEY || null, cluster: process.env.PUSHER_CLUSTER || null }); });
-app.post('/api/realtime/auth', requireAuth, (req, res) => { const channel = String(req.body.channel_name || ''); if (!channel.startsWith('private-')) return res.status(403).json({ error: 'Private channels only.' }); res.json(pusher.auth(String(req.body.socket_id || ''), channel)); });
+app.post('/api/realtime/auth', requireAuth, (req, res) => { if (!pusher.configured()) return res.status(503).json({ error: 'Pusher is not configured on this deployment.' }); const channel = String(req.body.channel_name || ''); const socketId = String(req.body.socket_id || ''); if (!channel.startsWith('private-') || !socketId) return res.status(400).json({ error: 'Invalid Pusher authorization request.' }); try { res.json(pusher.auth(socketId, channel)); } catch (error) { console.error('Pusher auth failed:', error); res.status(500).json({ error: 'Unable to authorize realtime channel.' }); } });
 app.post('/api/livekit/token', requireAuth, requireMember, async (req, res) => { if (!process.env.LIVEKIT_URL || !process.env.LIVEKIT_API_KEY || !process.env.LIVEKIT_API_SECRET) return res.status(503).json({ error: 'LiveKit is not configured.' }); const channelId = Number(req.body.channelId); if (!channelId) return res.status(400).json({ error: 'A voice channel is required.' }); const room = `luma-channel-${channelId}`; res.json({ url: process.env.LIVEKIT_URL, token: livekit.token(String(req.user.id), room), room }); });
 
 app.get('/api/invites/:code', async (req, res) => {
