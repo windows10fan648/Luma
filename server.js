@@ -131,6 +131,8 @@ app.delete('/api/account', requireAuth, async (req, res) => { if (req.body.confi
 app.post('/api/auth/logout', async (req, res) => { try { const token = cookies(req).luma_session; if (token) await query('DELETE FROM sessions WHERE token = ?', [token]); } catch (error) { console.error(error); } res.setHeader('Set-Cookie', 'luma_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({ ok: true }); });
 app.get('/api/auth/me', async (req, res) => { try { const user = await currentUser(req); if (!user) return res.status(401).json({ error: 'Not logged in.' }); res.json({ user }); } catch { res.status(503).json({ error: 'Database unavailable.' }); } });
 async function entitlement(userId) {
+  const [owner] = await query("SELECT user_id FROM workspace_members WHERE user_id = ? AND role = 'owner' LIMIT 1", [userId]);
+  if (owner) return { plan: 'premium', source: 'owner', expiresAt: null };
   const [promo] = await query('SELECT plan, expires_at FROM promo_redemptions WHERE user_id = ? AND expires_at > NOW() ORDER BY expires_at DESC LIMIT 1', [userId]);
   if (promo) return { plan: promo.plan, source: 'promo', expiresAt: promo.expires_at };
   const [subscription] = await query("SELECT plan, status, current_period_end FROM subscriptions WHERE user_id = ? AND status IN ('active', 'trialing') AND current_period_end > NOW()", [userId]);
@@ -139,6 +141,7 @@ async function entitlement(userId) {
 }
 app.get('/api/billing/status', requireAuth, async (req, res) => { try { res.json({ stripeConfigured: stripeConfigured(), ...(await entitlement(req.user.id)) }); } catch { res.status(503).json({ error: 'Unable to load billing status.' }); } });
 app.post('/api/billing/checkout', requireAuth, async (req, res) => {
+  if ((await entitlement(req.user.id)).source === 'owner') return res.json({ owner: true });
   if (!stripeConfigured() || !process.env.STRIPE_PREMIUM_PRICE_ID) return res.status(503).json({ error: 'Subscriptions are not configured yet.' });
   try {
     const [existing] = await query('SELECT stripe_customer_id FROM subscriptions WHERE user_id = ?', [req.user.id]);
