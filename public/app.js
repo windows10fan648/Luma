@@ -1,5 +1,6 @@
 if (window.lucide) lucide.createIcons();
 const state = { channels: [], activeChannel: null, members: [], user: null };
+let pendingAttachmentId = null;
 const toast = document.querySelector('#toast'); let toastTimer;
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 2200); }
 function initials(name) { return name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(); }
@@ -39,6 +40,7 @@ function renderMessage(message) {
   const ownActions = state.user && Number(message.author_id) === Number(state.user.id) ? '<div class="message-tools"><button data-edit title="Edit message">✎</button><button data-delete title="Delete message">×</button></div>' : '';
   article.innerHTML = `<div class="avatar ${avatarClass(author)}">${initials(author)}</div><div class="message-content"><div class="message-meta"><strong></strong><time></time>${message.edited_at ? '<span>(edited)</span>' : ''}</div><p></p><div class="reaction-row"><button class="reaction" data-react="✨">✨ <span>${message.reaction_count || 0}</span></button>${ownActions}</div></div>`;
   article.querySelector('strong').textContent = author; article.querySelector('time').textContent = new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); article.querySelector('p').textContent = message.content;
+  if (message.attachment_id) { const link = document.createElement('a'); link.href = `/api/uploads/${message.attachment_id}`; link.textContent = message.file_name || 'Open attachment'; link.target = '_blank'; link.className = 'attachment-link'; article.querySelector('.message-content').append(link); }
   article.querySelector('[data-react]')?.addEventListener('click', async (event) => { const response = await fetch(`/api/messages/${message.id}/reactions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emoji: '✨' }) }); if (response.ok) event.currentTarget.querySelector('span').textContent = (await response.json()).count; });
   article.querySelector('[data-edit]')?.addEventListener('click', async () => { const content = window.prompt('Edit your message', message.content); if (!content || content.trim() === message.content) return; const response = await fetch(`/api/messages/${message.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) }); if (response.ok) loadMessages(state.activeChannel); else showToast('Unable to edit message'); });
   article.querySelector('[data-delete]')?.addEventListener('click', async () => { if (!window.confirm('Delete this message?')) return; const response = await fetch(`/api/messages/${message.id}`, { method: 'DELETE' }); if (response.ok) article.remove(); else showToast('Unable to delete message'); });
@@ -63,15 +65,19 @@ document.querySelector('#composer').addEventListener('submit', async (event) => 
   event.preventDefault(); const input = document.querySelector('#message-input'); const content = input.value.trim(); if (!content || !state.activeChannel) return;
   const button = document.querySelector('.send-button'); button.disabled = true;
   try {
-    const response = await fetch(`/api/channels/${state.activeChannel.id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) }); const message = await response.json(); if (!response.ok) throw new Error(message.error);
-    const list = document.querySelector('#message-list'); list.querySelector('.empty-state')?.remove(); list.append(renderMessage(message)); input.value = ''; document.querySelector('#message-area').scrollTo({ top: document.querySelector('#message-area').scrollHeight, behavior: 'smooth' });
+    const response = await fetch(`/api/channels/${state.activeChannel.id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, attachmentId: pendingAttachmentId }) }); const message = await response.json(); if (!response.ok) throw new Error(message.error);
+    const list = document.querySelector('#message-list'); list.querySelector('.empty-state')?.remove(); list.append(renderMessage(message)); input.value = ''; pendingAttachmentId = null; document.querySelector('#message-area').scrollTo({ top: document.querySelector('#message-area').scrollHeight, behavior: 'smooth' });
   } catch (error) { showToast(error.message || 'Unable to send message'); } button.disabled = false;
 });
 document.querySelector('.emoji-trigger').addEventListener('click', () => { const input = document.querySelector('#message-input'); input.value += ' ✨'; input.focus(); });
-document.querySelector('.compose-add').addEventListener('click', () => showToast('Attachments are coming soon'));
+const filePicker = document.createElement('input'); filePicker.type = 'file'; filePicker.hidden = true; filePicker.accept = 'image/*,.pdf,.txt,.zip'; document.body.append(filePicker);
+document.querySelector('.compose-add').addEventListener('click', () => filePicker.click());
+filePicker.addEventListener('change', async () => { const file = filePicker.files[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) return showToast('Files must be smaller than 5 MB'); const reader = new FileReader(); reader.onload = async () => { const response = await fetch('/api/uploads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileName: file.name, mimeType: file.type, data: reader.result }) }); const data = await response.json(); if (!response.ok) return showToast(data.error); pendingAttachmentId = data.id; showToast(`${file.name} attached`); }; reader.readAsDataURL(file); });
 document.querySelector('.add-server').addEventListener('click', async () => { const name = window.prompt('Name your new workspace'); if (name) showToast('Workspace creation is next on the roadmap'); });
 document.querySelectorAll('.tiny-plus').forEach((button) => button.addEventListener('click', async () => { const name = window.prompt('New text channel name'); if (!name) return; const response = await fetch('/api/channels', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }); const data = await response.json(); if (!response.ok) return showToast(data.error); state.channels.push(data); renderChannels(); await selectChannel(data); }));
 document.querySelector('#logout').addEventListener('click', async () => { await fetch('/api/auth/logout', { method: 'POST' }); window.location.href = '/auth'; });
+async function refreshNotifications() { const response = await fetch('/api/notifications'); if (!response.ok) return; const items = await response.json(); const unread = items.filter((item) => !item.read_at); if (unread.length) showToast(`${unread.length} new notification${unread.length === 1 ? '' : 's'}`); }
+document.querySelector('.header-action').addEventListener('click', refreshNotifications); setInterval(refreshNotifications, 15000);
 
 async function boot() {
   try {
