@@ -24,6 +24,7 @@ async function initDatabase() {
             username VARCHAR(32) NOT NULL UNIQUE,
             display_name VARCHAR(64) NOT NULL,
             email VARCHAR(255) UNIQUE,
+            supabase_id VARCHAR(80) UNIQUE,
             password_hash VARCHAR(255),
             status VARCHAR(32) NOT NULL DEFAULT 'online',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -32,6 +33,8 @@ async function initDatabase() {
         try { await connection.query('ALTER TABLE users ADD COLUMN email VARCHAR(255)'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
         try { await connection.query('CREATE UNIQUE INDEX users_email_unique ON users (email)'); } catch (error) { if (!String(error.message).toLowerCase().includes('already exists') && error.code !== 'ER_DUP_KEYNAME') throw error; }
         try { await connection.query('ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
+        try { await connection.query('ALTER TABLE users ADD COLUMN supabase_id VARCHAR(80)'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
+        try { await connection.query('CREATE UNIQUE INDEX users_supabase_unique ON users (supabase_id)'); } catch (error) { if (!String(error.message).toLowerCase().includes('already exists') && error.code !== 'ER_DUP_KEYNAME') throw error; }
         await connection.query(`
           CREATE TABLE IF NOT EXISTS workspaces (
             id INT AUTO_INCREMENT PRIMARY KEY,

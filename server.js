@@ -3,6 +3,7 @@ const express = require('express');
 const crypto = require('crypto');
 require('dotenv').config();
 const { initDatabase, query } = require('./db');
+const supabase = require('./supabase');
 const pusher = require('./realtime');
 
 const app = express();
@@ -12,6 +13,7 @@ app.use(express.json({ limit: '8mb' }));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/auth', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'auth.html')));
+app.get('/reset-password', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'reset.html')));
 app.get('/friends', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'friends.html')));
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
@@ -54,25 +56,30 @@ app.post('/api/auth/signup', async (req, res) => {
   if (!/^\S+@\S+\.\S+$/.test(email) || !/^[a-z0-9_]{3,24}$/.test(username) || displayName.length < 2 || password.length < 8) return res.status(400).json({ error: 'Use a valid email, a 3–24 character username, and a password with at least 8 characters.' });
   try {
     if ((await query('SELECT id FROM users WHERE email = ? OR username = ?', [email, username])).length) return res.status(409).json({ error: 'That email or username is already in use.' });
-    const result = await query('INSERT INTO users (username, display_name, email, password_hash) VALUES (?, ?, ?, ?)', [username, displayName, email, hashPassword(password)]);
+    let supabaseUser; let accessToken;
+    if (supabase.configured()) { const auth = await supabase.request('/signup', { method: 'POST', body: JSON.stringify({ email, password, data: { username, display_name: displayName } }) }); supabaseUser = auth.user; accessToken = auth.access_token; }
+    const result = await query('INSERT INTO users (username, display_name, email, supabase_id, password_hash) VALUES (?, ?, ?, ?, ?)', [username, displayName, email, supabaseUser?.id || null, supabaseUser ? null : hashPassword(password)]);
     const [workspace] = await query('SELECT id FROM workspaces LIMIT 1');
     if (workspace) await query('INSERT IGNORE INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)', [workspace.id, result.insertId, 'member']);
-    const token = crypto.randomBytes(32).toString('hex'); await query('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY))', [token, result.insertId]);
-    res.setHeader('Set-Cookie', `luma_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
-    res.status(201).json({ user: { username, display_name: displayName, email } });
-  } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to create your account.' }); }
+    if (!supabaseUser || accessToken) { const token = crypto.randomBytes(32).toString('hex'); await query('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY))', [token, result.insertId]); res.setHeader('Set-Cookie', `luma_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`); }
+    res.status(201).json({ user: { username, display_name: displayName, email }, verificationRequired: Boolean(supabaseUser && !accessToken) });
+  } catch (error) { console.error(error); res.status(error.status === 400 ? 400 : 503).json({ error: error.message || 'Unable to create your account.' }); }
 });
 
 app.post('/api/auth/login', async (req, res) => {
   const login = String(req.body.login || '').trim().toLowerCase(); const password = String(req.body.password || '');
   try {
-    const [user] = await query('SELECT id, username, display_name, email, password_hash FROM users WHERE LOWER(email) = ? OR LOWER(username) = ? OR LOWER(display_name) = ?', [login, login, login]);
-    if (!user || !passwordMatches(password, user.password_hash)) return res.status(401).json({ error: 'That login or password is incorrect.' });
+    let user; let supabaseAuth;
+    if (supabase.configured() && login.includes('@')) { try { supabaseAuth = await supabase.request('/token?grant_type=password', { method: 'POST', body: JSON.stringify({ email: login, password }) }); } catch (error) { if (error.message.toLowerCase().includes('confirm')) return res.status(403).json({ error: 'Please verify your email before logging in.' }); } }
+    if (supabaseAuth?.user) { [user] = await query('SELECT id, username, display_name, email, password_hash FROM users WHERE supabase_id = ?', [supabaseAuth.user.id]); if (!user) { const metadata = supabaseAuth.user.user_metadata || {}; const username = metadata.username || login.split('@')[0]; const result = await query('INSERT INTO users (username, display_name, email, supabase_id) VALUES (?, ?, ?, ?)', [username, metadata.display_name || username, login, supabaseAuth.user.id]); await query('INSERT IGNORE INTO workspace_members (workspace_id, user_id, role) SELECT id, ?, \'member\' FROM workspaces LIMIT 1', [result.insertId]); [user] = await query('SELECT id, username, display_name, email, password_hash FROM users WHERE id = ?', [result.insertId]); } } else [user] = await query('SELECT id, username, display_name, email, password_hash FROM users WHERE LOWER(email) = ? OR LOWER(username) = ? OR LOWER(display_name) = ?', [login, login, login]);
+    if (!user || (!supabaseAuth && !passwordMatches(password, user.password_hash))) return res.status(401).json({ error: 'That login or password is incorrect.' });
     const token = crypto.randomBytes(32).toString('hex'); await query('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY))', [token, user.id]);
     res.setHeader('Set-Cookie', `luma_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
     res.json({ user: { username: user.username, display_name: user.display_name, email: user.email } });
   } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to log in right now.' }); }
 });
+app.post('/api/auth/forgot-password', async (req, res) => { const email = String(req.body.email || '').trim().toLowerCase(); if (!email) return res.status(400).json({ error: 'Email is required.' }); try { if (!supabase.configured()) return res.status(503).json({ error: 'Password recovery is not configured.' }); const redirectTo = `${process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`}/reset-password`; await supabase.request('/recover', { method: 'POST', body: JSON.stringify({ email, redirect_to: redirectTo }) }); res.json({ ok: true }); } catch { res.json({ ok: true }); } });
+app.post('/api/auth/reset-password', async (req, res) => { const password = String(req.body.password || ''); const accessToken = String(req.body.accessToken || ''); if (password.length < 8 || !accessToken) return res.status(400).json({ error: 'A valid recovery session and password are required.' }); try { await supabase.request('/user', { method: 'PUT', body: JSON.stringify({ password }) }, accessToken); res.json({ ok: true }); } catch (error) { res.status(400).json({ error: error.message }); } });
 app.post('/api/auth/logout', async (req, res) => { try { const token = cookies(req).luma_session; if (token) await query('DELETE FROM sessions WHERE token = ?', [token]); } catch (error) { console.error(error); } res.setHeader('Set-Cookie', 'luma_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({ ok: true }); });
 app.get('/api/auth/me', async (req, res) => { try { const user = await currentUser(req); if (!user) return res.status(401).json({ error: 'Not logged in.' }); res.json({ user }); } catch { res.status(503).json({ error: 'Database unavailable.' }); } });
 app.get('/api/realtime/config', requireAuth, (_req, res) => { res.json({ enabled: pusher.configured(), key: process.env.PUSHER_KEY || null, cluster: process.env.PUSHER_CLUSTER || null }); });
@@ -89,7 +96,7 @@ app.get('/api/workspace', requireAuth, requireMember, async (req, res) => {
   try {
     const [workspace] = await query('SELECT id, name FROM workspaces LIMIT 1');
     const channels = await query('SELECT id, name, description, type, position FROM channels WHERE workspace_id = ? ORDER BY position', [workspace.id]);
-    const members = await query('SELECT users.id, username, display_name, status, workspace_members.role FROM users JOIN workspace_members ON workspace_members.user_id = users.id WHERE workspace_members.workspace_id = ? AND password_hash IS NOT NULL ORDER BY display_name', [workspace.id]);
+    const members = await query('SELECT users.id, username, display_name, status, workspace_members.role FROM users JOIN workspace_members ON workspace_members.user_id = users.id WHERE workspace_members.workspace_id = ? AND users.email IS NOT NULL ORDER BY display_name', [workspace.id]);
     res.json({ workspace, channels, members });
   } catch (error) {
     console.error(error);
