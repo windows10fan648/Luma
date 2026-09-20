@@ -1,5 +1,5 @@
 if (window.lucide) lucide.createIcons();
-const state = { channels: [], activeChannel: null, members: [], user: null, mediaStream: null, muted: false };
+const state = { channels: [], activeChannel: null, members: [], user: null, mediaStream: null, muted: false, eventSource: null };
 let pendingAttachmentId = null;
 const toast = document.querySelector('#toast'); let toastTimer;
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 2200); }
@@ -70,6 +70,7 @@ async function selectChannel(channel) {
   if (!channel) return; state.activeChannel = channel;
   document.querySelectorAll('.channel[data-channel-id]').forEach((item) => item.classList.toggle('active', Number(item.dataset.channelId) === channel.id));
   document.querySelector('#channel-name').textContent = channel.name; document.querySelector('#channel-description').textContent = channel.description; document.querySelector('#message-input').placeholder = `Message #${channel.name}`;
+  state.eventSource?.close(); state.eventSource = new EventSource(`/api/events?channelId=${channel.id}`); state.eventSource.addEventListener('message', () => loadMessages(channel)); state.eventSource.addEventListener('notification', refreshNotifications);
   await loadMessages(channel);
 }
 
@@ -115,4 +116,3 @@ async function boot() {
   } catch { document.querySelector('#message-list').innerHTML = '<p class="empty-state">Connect your database to load this workspace.</p>'; showToast('Workspace could not be loaded'); }
 }
 boot();
-setInterval(() => { if (state.activeChannel && document.visibilityState === 'visible') loadMessages(state.activeChannel); }, 5000);

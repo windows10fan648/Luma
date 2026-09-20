@@ -113,6 +113,27 @@ app.get('/api/uploads/:id', async (req, res) => { try { const [file] = await que
 app.get('/api/notifications', requireAuth, async (req, res) => { res.json(await query('SELECT id, type, title, body, link, read_at, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 30', [req.user.id])); });
 app.patch('/api/notifications/:id/read', requireAuth, async (req, res) => { await query('UPDATE notifications SET read_at = NOW() WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]); res.json({ ok: true }); });
 
+app.get('/api/events', requireAuth, async (req, res) => {
+  res.status(200).set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+  res.flushHeaders?.();
+  let lastMessageId = Number(req.query.after || 0);
+  let lastNotificationId = 0;
+  const channelId = Number(req.query.channelId || 0);
+  const dmUserId = Number(req.query.dmUserId || 0);
+  let closed = false;
+  const send = (event, data) => { if (!closed) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
+  const poll = async () => {
+    try {
+      if (channelId) { const [message] = await query('SELECT id FROM messages WHERE channel_id = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1', [channelId]); if (message && Number(message.id) > lastMessageId) { lastMessageId = Number(message.id); send('message', { channelId }); } }
+      if (dmUserId) { const conversationId = await getDmConversation(req.user.id, dmUserId); const [message] = await query('SELECT id FROM direct_messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1', [conversationId]); if (message && Number(message.id) > lastMessageId) { lastMessageId = Number(message.id); send('dm', { userId: dmUserId }); } }
+      const [notification] = await query('SELECT id FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 1', [req.user.id]); if (notification && Number(notification.id) > lastNotificationId) { lastNotificationId = Number(notification.id); send('notification', { id: notification.id }); }
+      send('ping', { at: Date.now() });
+    } catch (error) { send('error', { message: 'Live updates temporarily unavailable.' }); }
+  };
+  send('ready', { at: Date.now() }); await poll(); const timer = setInterval(poll, 2500);
+  req.on('close', () => { closed = true; clearInterval(timer); });
+});
+
 app.get('/api/users/:userId/profile', requireAuth, async (req, res) => {
   try {
     const [user] = await query('SELECT id, username, display_name, status, created_at FROM users WHERE id = ? AND password_hash IS NOT NULL', [req.params.userId]);
