@@ -10,6 +10,7 @@ const port = process.env.PORT || 3000;
 app.use(express.json({ limit: '8mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/auth', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'auth.html')));
+app.get('/friends', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'friends.html')));
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   return `${salt}:${crypto.scryptSync(password, salt, 64).toString('hex')}`;
@@ -148,6 +149,26 @@ app.patch('/api/friend-requests/:requestId', requireAuth, async (req, res) => {
     await query('INSERT INTO notifications (user_id, type, title, body, link) VALUES (?, ?, ?, ?, ?)', [request.requester_id, 'friend_request', action === 'accepted' ? 'Friend request accepted' : 'Friend request declined', `${req.user.display_name} ${action === 'accepted' ? 'accepted' : 'declined'} your friend request`, '/']);
     res.json({ ok: true, relationship: action === 'accepted' ? 'friends' : 'none' });
   } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to update friend request.' }); }
+});
+
+app.get('/api/dms', requireAuth, async (req, res) => {
+  const rows = await query(`SELECT conversations.id, users.id AS user_id, users.username, users.display_name, users.status, MAX(direct_messages.created_at) AS last_message_at, (SELECT content FROM direct_messages latest WHERE latest.conversation_id = conversations.id ORDER BY latest.created_at DESC LIMIT 1) AS last_message FROM conversations JOIN conversation_members mine ON mine.conversation_id = conversations.id AND mine.user_id = ? JOIN conversation_members other ON other.conversation_id = conversations.id AND other.user_id != ? JOIN users ON users.id = other.user_id LEFT JOIN direct_messages ON direct_messages.conversation_id = conversations.id WHERE conversations.kind = 'dm' GROUP BY conversations.id, users.id, users.username, users.display_name, users.status ORDER BY last_message_at DESC`, [req.user.id, req.user.id]);
+  res.json(rows);
+});
+async function getDmConversation(userId, otherId) {
+  const [existing] = await query(`SELECT conversations.id FROM conversations JOIN conversation_members a ON a.conversation_id = conversations.id AND a.user_id = ? JOIN conversation_members b ON b.conversation_id = conversations.id AND b.user_id = ? WHERE conversations.kind = 'dm' LIMIT 1`, [userId, otherId]);
+  if (existing) return existing.id;
+  const result = await query('INSERT INTO conversations (kind) VALUES (?)', ['dm']);
+  await query('INSERT INTO conversation_members (conversation_id, user_id) VALUES (?, ?), (?, ?)', [result.insertId, userId, result.insertId, otherId]);
+  return result.insertId;
+}
+app.get('/api/dms/:userId/messages', requireAuth, async (req, res) => {
+  const otherId = Number(req.params.userId); if (!otherId) return res.status(400).json({ error: 'Invalid user.' });
+  try { const conversationId = await getDmConversation(req.user.id, otherId); res.json(await query('SELECT direct_messages.id, direct_messages.content, direct_messages.author_id, direct_messages.created_at, users.display_name, users.username FROM direct_messages JOIN users ON users.id = direct_messages.author_id WHERE conversation_id = ? ORDER BY direct_messages.created_at ASC LIMIT 200', [conversationId])); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to load direct messages.' }); }
+});
+app.post('/api/dms/:userId/messages', requireAuth, async (req, res) => {
+  const otherId = Number(req.params.userId); const content = String(req.body.content || '').trim(); if (!otherId || !content || content.length > 2000) return res.status(400).json({ error: 'Invalid direct message.' });
+  try { const [other] = await query('SELECT id FROM users WHERE id = ? AND password_hash IS NOT NULL', [otherId]); if (!other) return res.status(404).json({ error: 'User not found.' }); const conversationId = await getDmConversation(req.user.id, otherId); const result = await query('INSERT INTO direct_messages (conversation_id, author_id, content) VALUES (?, ?, ?)', [conversationId, req.user.id, content]); await query('INSERT INTO notifications (user_id, type, title, body, link) VALUES (?, ?, ?, ?, ?)', [otherId, 'dm', `Message from ${req.user.display_name}`, content.slice(0, 120), '/friends']); res.status(201).json({ id: result.insertId, content, author_id: req.user.id, display_name: req.user.display_name, username: req.user.username, created_at: new Date().toISOString() }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to send direct message.' }); }
 });
 
 app.post('/api/channels', requireAuth, requireMember, async (req, res) => {

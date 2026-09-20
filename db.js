@@ -166,6 +166,35 @@ async function initDatabase() {
           )
         `);
         await connection.query(`
+          CREATE TABLE IF NOT EXISTS conversations (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            kind ENUM('dm', 'group') NOT NULL DEFAULT 'dm',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS conversation_members (
+            conversation_id BIGINT NOT NULL,
+            user_id INT NOT NULL,
+            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (conversation_id, user_id),
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          )
+        `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS direct_messages (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            conversation_id BIGINT NOT NULL,
+            author_id INT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+            FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX dm_history (conversation_id, created_at)
+          )
+        `);
+        await connection.query(`
           CREATE TABLE IF NOT EXISTS voice_signals (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
             channel_id INT NOT NULL,
