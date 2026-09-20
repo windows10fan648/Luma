@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
-    <script src="https://unpkg.com/lucide@latest"></script><script src="https://js.pusher.com/8.4.0/pusher.min.js"></script><script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script><script src="https://js.pusher.com/8.4.0/pusher.min.js"></script>
     <style>
       svg { width: 16px; height: 16px; stroke-width: 2; vertical-align: middle; }
       .brand-mark svg { width: 21px; height: 21px; } .rail-icon svg { width: 18px; height: 18px; }
@@ -86,7 +86,7 @@
       </aside>
     </div>
     <div class="profile-modal" id="profile-modal" aria-hidden="true"><div class="profile-backdrop" data-close-profile></div><section class="profile-card"><button class="profile-close" data-close-profile aria-label="Close profile">×</button><div class="profile-avatar" id="profile-avatar"></div><p class="profile-handle" id="profile-handle"></p><h2 id="profile-name"></h2><p class="profile-status" id="profile-status"></p><div class="profile-actions" id="profile-actions"></div></section></div>
-    <div class="voice-modal" id="voice-modal" aria-hidden="true"><section class="voice-card"><div class="voice-card-head"><div><p class="eyebrow">live room</p><h2 id="voice-room-name">Voice room</h2></div><span id="voice-connection">Connecting…</span></div><div class="video-grid" id="video-grid"></div><div class="voice-controls"><button id="voice-mic" aria-label="Mute microphone"><i data-lucide="mic"></i></button><button id="voice-camera" aria-label="Turn camera on"><i data-lucide="video"></i></button><button class="leave-voice" id="leave-voice" aria-label="Leave room"><i data-lucide="phone-off"></i></button></div></section></div>
+    <div class="voice-modal" id="voice-modal" aria-hidden="true"><section class="voice-card"><div class="voice-card-head"><div><p class="eyebrow">peer voice room</p><h2 id="voice-room-name">Voice room</h2></div><span id="voice-connection">Connecting…</span></div><div class="video-grid" id="video-grid"></div><div class="voice-controls"><button id="voice-mic" aria-label="Mute microphone"><i data-lucide="mic"></i></button><button class="leave-voice" id="leave-voice" aria-label="Leave room"><i data-lucide="phone-off"></i></button></div></section></div>
     <div class="toast" id="toast" role="status"></div>
     <script src="/app.js"></script>
   </body>

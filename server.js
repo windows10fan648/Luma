@@ -4,7 +4,6 @@ const crypto = require('crypto');
 require('dotenv').config();
 const { initDatabase, query } = require('./db');
 const pusher = require('./realtime');
-const livekit = require('./livekit');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -78,7 +77,6 @@ app.post('/api/auth/logout', async (req, res) => { try { const token = cookies(r
 app.get('/api/auth/me', async (req, res) => { try { const user = await currentUser(req); if (!user) return res.status(401).json({ error: 'Not logged in.' }); res.json({ user }); } catch { res.status(503).json({ error: 'Database unavailable.' }); } });
 app.get('/api/realtime/config', requireAuth, (_req, res) => { res.json({ enabled: pusher.configured(), key: process.env.PUSHER_KEY || null, cluster: process.env.PUSHER_CLUSTER || null }); });
 app.post('/api/realtime/auth', requireAuth, (req, res) => { if (!pusher.configured()) return res.status(503).json({ error: 'Pusher is not configured on this deployment.' }); const channel = String(req.body.channel_name || ''); const socketId = String(req.body.socket_id || ''); if (!channel.startsWith('private-') || !socketId) return res.status(400).json({ error: 'Invalid Pusher authorization request.' }); try { res.json(pusher.auth(socketId, channel)); } catch (error) { console.error('Pusher auth failed:', error); res.status(500).json({ error: 'Unable to authorize realtime channel.' }); } });
-app.post('/api/livekit/token', requireAuth, requireMember, async (req, res) => { if (!process.env.LIVEKIT_URL || !process.env.LIVEKIT_API_KEY || !process.env.LIVEKIT_API_SECRET) return res.status(503).json({ error: 'LiveKit is not configured.' }); const channelId = Number(req.body.channelId); if (!channelId) return res.status(400).json({ error: 'A voice channel is required.' }); const room = `luma-channel-${channelId}`; res.json({ url: process.env.LIVEKIT_URL, token: livekit.token(String(req.user.id), room), room }); });
 
 app.get('/api/invites/:code', async (req, res) => {
   try { const [invite] = await query('SELECT workspace_id, expires_at FROM workspace_invites WHERE code = ? AND expires_at > NOW()', [req.params.code]); if (!invite) return res.status(404).json({ error: 'Invite expired or invalid.' }); const [workspace] = await query('SELECT id, name FROM workspaces WHERE id = ?', [invite.workspace_id]); res.json({ workspace }); } catch { res.status(503).json({ error: 'Unable to check invite.' }); }
@@ -262,8 +260,8 @@ app.post('/api/messages/:messageId/reactions', requireAuth, async (req, res) => 
   try { const existing = await query('SELECT message_id FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?', [req.params.messageId, req.user.id, emoji]); if (existing.length) await query('DELETE FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?', [req.params.messageId, req.user.id, emoji]); else await query('INSERT INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)', [req.params.messageId, req.user.id, emoji]); const [count] = await query('SELECT COUNT(*) AS count FROM message_reactions WHERE message_id = ?', [req.params.messageId]); res.json({ active: !existing.length, count: count.count }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to update reaction.' }); }
 });
 
-app.get('/api/voice/:channelId/signals', requireAuth, async (req, res) => { const after = Number(req.query.after || 0); res.json(await query('SELECT id, sender_id, recipient_id, payload FROM voice_signals WHERE channel_id = ? AND id > ? AND (recipient_id IS NULL OR recipient_id = ?) ORDER BY id ASC LIMIT 100', [req.params.channelId, after, req.user.id])); });
-app.post('/api/voice/:channelId/signals', requireAuth, async (req, res) => { const payload = JSON.stringify(req.body.payload || {}); const result = await query('INSERT INTO voice_signals (channel_id, sender_id, recipient_id, payload) VALUES (?, ?, ?, ?)', [req.params.channelId, req.user.id, req.body.recipientId || null, payload]); res.status(201).json({ id: result.insertId }); });
+app.get('/api/voice/:channelId/signals', requireAuth, requireMember, async (req, res) => { const after = Number(req.query.after || 0); res.json(await query('SELECT id, sender_id, recipient_id, payload FROM voice_signals WHERE channel_id = ? AND id > ? AND (recipient_id IS NULL OR recipient_id = ?) ORDER BY id ASC LIMIT 100', [req.params.channelId, after, req.user.id])); });
+app.post('/api/voice/:channelId/signals', requireAuth, requireMember, async (req, res) => { const payload = JSON.stringify(req.body.payload || {}); const result = await query('INSERT INTO voice_signals (channel_id, sender_id, recipient_id, payload) VALUES (?, ?, ?, ?)', [req.params.channelId, req.user.id, req.body.recipientId || null, payload]); res.status(201).json({ id: result.insertId }); });
 
 app.post('/api/invites', requireAuth, async (req, res) => {
   try { const [workspace] = await query('SELECT id FROM workspaces LIMIT 1'); const code = crypto.randomBytes(16).toString('hex'); await query('INSERT INTO workspace_invites (code, workspace_id, created_by, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY))', [code, workspace.id, req.user.id]); res.status(201).json({ code, url: `/auth?invite=${code}` }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to create invite.' }); }
