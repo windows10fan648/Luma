@@ -9,6 +9,46 @@ const pusher = require('./realtime');
 const app = express();
 const port = process.env.PORT || 3000;
 
+function stripeConfigured() { return Boolean(process.env.STRIPE_SECRET_KEY); }
+async function stripeRequest(endpoint, params = {}, method = 'POST') {
+  if (!stripeConfigured()) throw new Error('Stripe is not configured.');
+  const response = await fetch(`https://api.stripe.com/v1/${endpoint}`, {
+    method,
+    headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: method === 'GET' ? undefined : new URLSearchParams(params).toString(),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || 'Stripe request failed.');
+  return data;
+}
+function verifyStripeSignature(rawBody, signature) {
+  if (!process.env.STRIPE_WEBHOOK_SECRET || !signature) return false;
+  const parts = Object.fromEntries(signature.split(',').map((part) => part.split('=')));
+  const timestamp = Number(parts.t);
+  if (!timestamp || Math.abs(Date.now() / 1000 - timestamp) > 300 || !parts.v1) return false;
+  const signed = `${timestamp}.${rawBody.toString()}`;
+  const expected = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(signed).digest('hex');
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts.v1));
+}
+
+app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!verifyStripeSignature(req.body, req.headers['stripe-signature'])) return res.status(400).send('Invalid signature.');
+  try {
+    const event = JSON.parse(req.body.toString()); const object = event.data.object;
+    if (['checkout.session.completed'].includes(event.type)) {
+      const userId = Number(object.metadata?.user_id); const subscriptionId = object.subscription;
+      if (userId && subscriptionId) {
+        const subscription = await stripeRequest(`subscriptions/${subscriptionId}`, {}, 'GET');
+        await query(`INSERT INTO subscriptions (user_id, stripe_customer_id, stripe_subscription_id, plan, status, current_period_end) VALUES (?, ?, ?, 'premium', ?, FROM_UNIXTIME(?)) ON DUPLICATE KEY UPDATE stripe_customer_id=VALUES(stripe_customer_id), stripe_subscription_id=VALUES(stripe_subscription_id), plan='premium', status=VALUES(status), current_period_end=VALUES(current_period_end)`, [userId, object.customer, subscription.id, subscription.status, subscription.current_period_end]);
+      }
+    }
+    if (['customer.subscription.updated', 'customer.subscription.deleted'].includes(event.type)) {
+      await query('UPDATE subscriptions SET status = ?, current_period_end = FROM_UNIXTIME(?) WHERE stripe_subscription_id = ?', [object.status, object.current_period_end || Math.floor(Date.now() / 1000), object.id]);
+    }
+    res.json({ received: true });
+  } catch (error) { console.error('Stripe webhook failed:', error); res.status(500).send('Webhook processing failed.'); }
+});
+
 app.use(express.json({ limit: '8mb' }));
 app.use(express.urlencoded({ extended: false }));
 const rateBuckets = new Map();
@@ -21,6 +61,7 @@ app.get('/friends', (_req, res) => res.sendFile(path.join(__dirname, 'public', '
 app.get('/moderation', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'moderation.html')));
 app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
 app.get('/terms', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
+app.get('/billing', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'billing.html')));
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   return `${salt}:${crypto.scryptSync(password, salt, 64).toString('hex')}`;
@@ -89,6 +130,43 @@ app.post('/api/auth/reset-password', async (req, res) => { const password = Stri
 app.delete('/api/account', requireAuth, async (req, res) => { if (req.body.confirm !== 'DELETE') return res.status(400).json({ error: 'Type DELETE to confirm account removal.' }); try { await query('DELETE FROM sessions WHERE user_id = ?', [req.user.id]); await query('DELETE FROM workspace_members WHERE user_id = ?', [req.user.id]); await query('UPDATE users SET username = CONCAT(\'deleted_\', id), display_name = \'Deleted user\', email = NULL, password_hash = NULL, supabase_id = NULL, status = \'offline\' WHERE id = ?', [req.user.id]); res.setHeader('Set-Cookie', 'luma_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({ ok: true }); } catch (error) { console.error(error); res.status(503).json({ error: 'Unable to delete account.' }); } });
 app.post('/api/auth/logout', async (req, res) => { try { const token = cookies(req).luma_session; if (token) await query('DELETE FROM sessions WHERE token = ?', [token]); } catch (error) { console.error(error); } res.setHeader('Set-Cookie', 'luma_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); res.json({ ok: true }); });
 app.get('/api/auth/me', async (req, res) => { try { const user = await currentUser(req); if (!user) return res.status(401).json({ error: 'Not logged in.' }); res.json({ user }); } catch { res.status(503).json({ error: 'Database unavailable.' }); } });
+async function entitlement(userId) {
+  const [promo] = await query('SELECT plan, expires_at FROM promo_redemptions WHERE user_id = ? AND expires_at > NOW() ORDER BY expires_at DESC LIMIT 1', [userId]);
+  if (promo) return { plan: promo.plan, source: 'promo', expiresAt: promo.expires_at };
+  const [subscription] = await query("SELECT plan, status, current_period_end FROM subscriptions WHERE user_id = ? AND status IN ('active', 'trialing') AND current_period_end > NOW()", [userId]);
+  if (subscription) return { plan: subscription.plan, source: 'stripe', status: subscription.status, expiresAt: subscription.current_period_end };
+  return { plan: 'free', source: 'none', expiresAt: null };
+}
+app.get('/api/billing/status', requireAuth, async (req, res) => { try { res.json({ stripeConfigured: stripeConfigured(), ...(await entitlement(req.user.id)) }); } catch { res.status(503).json({ error: 'Unable to load billing status.' }); } });
+app.post('/api/billing/checkout', requireAuth, async (req, res) => {
+  if (!stripeConfigured() || !process.env.STRIPE_PREMIUM_PRICE_ID) return res.status(503).json({ error: 'Subscriptions are not configured yet.' });
+  try {
+    const [existing] = await query('SELECT stripe_customer_id FROM subscriptions WHERE user_id = ?', [req.user.id]);
+    const base = { mode: 'subscription', 'line_items[0][price]': process.env.STRIPE_PREMIUM_PRICE_ID, 'line_items[0][quantity]': '1', success_url: `${process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`}/billing?success=1`, cancel_url: `${process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`}/billing?canceled=1`, 'metadata[user_id]': String(req.user.id), 'subscription_data[metadata][user_id]': String(req.user.id) };
+    if (existing?.stripe_customer_id) base.customer = existing.stripe_customer_id; else if (req.user.email) base.customer_email = req.user.email;
+    const session = await stripeRequest('checkout/sessions', base); res.json({ url: session.url });
+  } catch (error) { console.error(error); res.status(502).json({ error: error.message }); }
+});
+app.post('/api/billing/portal', requireAuth, async (req, res) => {
+  if (!stripeConfigured()) return res.status(503).json({ error: 'Billing is not configured yet.' });
+  try { const [subscription] = await query('SELECT stripe_customer_id FROM subscriptions WHERE user_id = ?', [req.user.id]); if (!subscription?.stripe_customer_id) return res.status(400).json({ error: 'No Stripe subscription found.' }); const session = await stripeRequest('billing_portal/sessions', { customer: subscription.stripe_customer_id, return_url: `${process.env.PUBLIC_APP_URL || `${req.protocol}://${req.get('host')}`}/billing` }); res.json({ url: session.url }); } catch (error) { res.status(502).json({ error: error.message }); }
+});
+app.post('/api/billing/promo-codes', requireAuth, requireMember, async (req, res) => {
+  if (!['owner', 'admin'].includes(req.membership.role)) return res.status(403).json({ error: 'Only workspace owners and admins can create promo codes.' });
+  const durationDays = Math.min(Math.max(Number(req.body.durationDays) || 30, 1), 365); const maxRedemptions = Math.min(Math.max(Number(req.body.maxRedemptions) || 1, 1), 1000); const code = `LUMA-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
+  try { await query('INSERT INTO promo_codes (code, plan, duration_days, max_redemptions, expires_at, created_by) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY), ?)', [code, 'premium', durationDays, maxRedemptions, req.user.id]); res.status(201).json({ code, plan: 'premium', durationDays, maxRedemptions }); } catch { res.status(503).json({ error: 'Unable to create promo code.' }); }
+});
+app.post('/api/billing/promo-codes/redeem', requireAuth, async (req, res) => {
+  const code = String(req.body.code || '').trim().toUpperCase(); if (!/^LUMA-[A-F0-9]{10}$/.test(code)) return res.status(400).json({ error: 'Enter a valid Luma promo code.' });
+  try {
+    if ((await query('SELECT code FROM promo_redemptions WHERE code = ? AND user_id = ?', [code, req.user.id])).length) return res.status(409).json({ error: 'You already redeemed this code.' });
+    const result = await query('UPDATE promo_codes SET redemption_count = redemption_count + 1 WHERE code = ? AND redemption_count < max_redemptions AND (expires_at IS NULL OR expires_at > NOW())', [code]);
+    if (!result.affectedRows) return res.status(404).json({ error: 'That code is expired, invalid, or fully redeemed.' });
+    const [promo] = await query('SELECT plan, duration_days FROM promo_codes WHERE code = ?', [code]);
+    try { await query(`INSERT INTO promo_redemptions (code, user_id, plan, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ${Number(promo.duration_days)} DAY))`, [code, req.user.id, promo.plan]); } catch (error) { await query('UPDATE promo_codes SET redemption_count = redemption_count - 1 WHERE code = ?', [code]); throw error; }
+    res.json({ ok: true, plan: promo.plan, durationDays: promo.duration_days });
+  } catch (error) { if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'You already redeemed this code.' }); res.status(503).json({ error: 'Unable to redeem promo code.' }); }
+});
 app.get('/api/realtime/config', requireAuth, (_req, res) => { res.json({ enabled: pusher.configured(), key: process.env.PUSHER_KEY || null, cluster: process.env.PUSHER_CLUSTER || null }); });
 app.post('/api/realtime/auth', requireAuth, (req, res) => { if (!pusher.configured()) return res.status(503).json({ error: 'Pusher is not configured on this deployment.' }); const channel = String(req.body.channel_name || ''); const socketId = String(req.body.socket_id || ''); if (!channel.startsWith('private-') || !socketId) return res.status(400).json({ error: 'Invalid Pusher authorization request.' }); try { res.json(pusher.auth(socketId, channel)); } catch (error) { console.error('Pusher auth failed:', error); res.status(500).json({ error: 'Unable to authorize realtime channel.' }); } });
 

@@ -128,7 +128,7 @@ async function initDatabase() {
             file_name VARCHAR(255) NOT NULL,
             mime_type VARCHAR(120) NOT NULL,
             file_size INT NOT NULL,
-            data LONGBLOB NOT NULL,
+            data LONGBLOB NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (uploader_id) REFERENCES users(id)
           )
@@ -210,6 +210,43 @@ async function initDatabase() {
             FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
             FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
             INDEX voice_poll (channel_id, id)
+          )
+        `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS subscriptions (
+            user_id INT PRIMARY KEY,
+            stripe_customer_id VARCHAR(120) UNIQUE,
+            stripe_subscription_id VARCHAR(120) UNIQUE,
+            plan VARCHAR(32) NOT NULL DEFAULT 'free',
+            status VARCHAR(32) NOT NULL DEFAULT 'inactive',
+            current_period_end DATETIME NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          )
+        `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS promo_codes (
+            code VARCHAR(64) PRIMARY KEY,
+            plan VARCHAR(32) NOT NULL DEFAULT 'premium',
+            duration_days INT NOT NULL,
+            max_redemptions INT NOT NULL DEFAULT 1,
+            redemption_count INT NOT NULL DEFAULT 0,
+            expires_at DATETIME NULL,
+            created_by INT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+          )
+        `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS promo_redemptions (
+            code VARCHAR(64) NOT NULL,
+            user_id INT NOT NULL,
+            plan VARCHAR(32) NOT NULL,
+            expires_at DATETIME NOT NULL,
+            redeemed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (code, user_id),
+            FOREIGN KEY (code) REFERENCES promo_codes(code) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
           )
         `);
 
