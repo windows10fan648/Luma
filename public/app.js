@@ -1,5 +1,5 @@
 if (window.lucide) lucide.createIcons();
-const state = { channels: [], activeChannel: null, members: [], user: null, mediaStream: null, muted: false, eventSource: null, poller: null, pusher: null, pusherChannel: null, voiceChannel: null, voicePoller: null, voiceCursor: 0, peers: new Map() };
+const state = { channels: [], activeChannel: null, members: [], user: null, mediaStream: null, muted: false, eventSource: null, poller: null, pusher: null, pusherChannel: null, voiceChannel: null, voicePoller: null, voiceCursor: 0, peers: new Map(), iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 let pendingAttachmentId = null;
 const toast = document.querySelector('#toast'); let toastTimer;
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 2200); }

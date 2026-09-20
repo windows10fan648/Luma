@@ -30,6 +30,8 @@ async function initDatabase() {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           )
         `);
+        try { await connection.query('ALTER TABLE attachments MODIFY data LONGBLOB NULL'); } catch (error) { if (error.code !== 'ER_BAD_FIELD_ERROR' && error.code !== 'ER_NO_SUCH_TABLE') throw error; }
+        try { await connection.query('ALTER TABLE attachments ADD COLUMN storage_path VARCHAR(500) NULL'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME' && error.code !== 'ER_NO_SUCH_TABLE') throw error; }
         try { await connection.query('ALTER TABLE users ADD COLUMN email VARCHAR(255)'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
         try { await connection.query('CREATE UNIQUE INDEX users_email_unique ON users (email)'); } catch (error) { if (!String(error.message).toLowerCase().includes('already exists') && error.code !== 'ER_DUP_KEYNAME') throw error; }
         try { await connection.query('ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
