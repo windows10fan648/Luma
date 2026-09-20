@@ -72,6 +72,7 @@ async function initDatabase() {
         try { await connection.query('ALTER TABLE messages ADD COLUMN parent_id BIGINT NULL'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
         try { await connection.query('ALTER TABLE messages ADD COLUMN edited_at DATETIME NULL'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
         try { await connection.query('ALTER TABLE messages ADD COLUMN deleted_at DATETIME NULL'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
+        try { await connection.query('ALTER TABLE messages ADD COLUMN attachment_id BIGINT NULL'); } catch (error) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
         await connection.query(`
           CREATE TABLE IF NOT EXISTS message_reactions (
             message_id BIGINT NOT NULL,
@@ -103,6 +104,57 @@ async function initDatabase() {
             INDEX session_expiry (expires_at)
           )
         `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS workspace_members (
+            workspace_id INT NOT NULL,
+            user_id INT NOT NULL,
+            role ENUM('owner', 'admin', 'moderator', 'member') NOT NULL DEFAULT 'member',
+            banned_until DATETIME NULL,
+            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (workspace_id, user_id),
+            FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+          )
+        `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS attachments (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            uploader_id INT NOT NULL,
+            file_name VARCHAR(255) NOT NULL,
+            mime_type VARCHAR(120) NOT NULL,
+            file_size INT NOT NULL,
+            data LONGBLOB NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (uploader_id) REFERENCES users(id)
+          )
+        `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS notifications (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            type VARCHAR(40) NOT NULL,
+            title VARCHAR(160) NOT NULL,
+            body VARCHAR(500) NOT NULL,
+            link VARCHAR(255),
+            read_at DATETIME NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            INDEX user_notifications (user_id, created_at)
+          )
+        `);
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS voice_signals (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            channel_id INT NOT NULL,
+            sender_id INT NOT NULL,
+            recipient_id INT NULL,
+            payload JSON NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+            FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX voice_poll (channel_id, id)
+          )
+        `);
 
         const [users] = await connection.query('SELECT id FROM users WHERE username = ?', ['you']);
         let userId = users[0]?.id;
@@ -117,6 +169,7 @@ async function initDatabase() {
           const [result] = await connection.query('INSERT INTO workspaces (name, owner_id) VALUES (?, ?)', ['Luma House', userId]);
           workspaceId = result.insertId;
         }
+        await connection.query('INSERT IGNORE INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)', [workspaceId, userId, 'owner']);
 
         const channels = [
           ['general', 'A cozy corner for everyday conversations', 'text', 0],
