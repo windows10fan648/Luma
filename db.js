@@ -170,6 +170,7 @@ async function initDatabase() {
           workspaceId = result.insertId;
         }
         await connection.query('INSERT IGNORE INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)', [workspaceId, userId, 'owner']);
+        await connection.query('INSERT IGNORE INTO workspace_members (workspace_id, user_id, role) SELECT ?, id, \'member\' FROM users WHERE password_hash IS NOT NULL', [workspaceId]);
 
         const channels = [
           ['general', 'A cozy corner for everyday conversations', 'text', 0],

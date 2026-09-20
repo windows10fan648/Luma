@@ -52,6 +52,8 @@ app.post('/api/auth/signup', async (req, res) => {
   try {
     if ((await query('SELECT id FROM users WHERE email = ? OR username = ?', [email, username])).length) return res.status(409).json({ error: 'That email or username is already in use.' });
     const result = await query('INSERT INTO users (username, display_name, email, password_hash) VALUES (?, ?, ?, ?)', [username, displayName, email, hashPassword(password)]);
+    const [workspace] = await query('SELECT id FROM workspaces LIMIT 1');
+    if (workspace) await query('INSERT IGNORE INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)', [workspace.id, result.insertId, 'member']);
     const token = crypto.randomBytes(32).toString('hex'); await query('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY))', [token, result.insertId]);
     res.setHeader('Set-Cookie', `luma_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
     res.status(201).json({ user: { username, display_name: displayName, email } });
@@ -61,7 +63,7 @@ app.post('/api/auth/signup', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   const login = String(req.body.login || '').trim().toLowerCase(); const password = String(req.body.password || '');
   try {
-    const [user] = await query('SELECT id, username, display_name, email, password_hash FROM users WHERE email = ? OR username = ?', [login, login]);
+    const [user] = await query('SELECT id, username, display_name, email, password_hash FROM users WHERE LOWER(email) = ? OR LOWER(username) = ? OR LOWER(display_name) = ?', [login, login, login]);
     if (!user || !passwordMatches(password, user.password_hash)) return res.status(401).json({ error: 'That login or password is incorrect.' });
     const token = crypto.randomBytes(32).toString('hex'); await query('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY))', [token, user.id]);
     res.setHeader('Set-Cookie', `luma_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
@@ -92,7 +94,7 @@ app.get('/api/workspace', requireAuth, requireMember, async (req, res) => {
 
 app.get('/api/workspace/members', requireAuth, requireMember, async (req, res) => { res.json(await query('SELECT users.id, username, display_name, status, workspace_members.role, workspace_members.banned_until FROM users JOIN workspace_members ON workspace_members.user_id = users.id WHERE workspace_members.workspace_id = ?', [req.membership.workspace_id])); });
 app.patch('/api/workspace/members/:userId/role', requireAuth, requireMember, async (req, res) => { if (!canModerate(req.membership.role)) return res.status(403).json({ error: 'Moderator permission required.' }); const role = ['admin', 'moderator', 'member'].includes(req.body.role) ? req.body.role : null; if (!role) return res.status(400).json({ error: 'Invalid role.' }); await query('UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?', [role, req.membership.workspace_id, req.params.userId]); res.json({ ok: true }); });
-app.post('/api/workspace/members/:userId/timeout', requireAuth, requireMember, async (req, res) => { if (!canModerate(req.membership.role)) return res.status(403).json({ error: 'Moderator permission required.' }); const minutes = Math.min(Math.max(Number(req.body.minutes) || 10, 1), 10080); await query('UPDATE workspace_members SET banned_until = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE workspace_id = ? AND user_id = ?', [minutes, req.membership.workspace_id, req.params.userId]); res.json({ ok: true }); });
+app.post('/api/workspace/members/:userId/timeout', requireAuth, requireMember, async (req, res) => { if (!canModerate(req.membership.role)) return res.status(403).json({ error: 'Moderator permission required.' }); const minutes = Math.min(Math.max(Number(req.body.minutes) || 10, 1), 10080); await query(`UPDATE workspace_members SET banned_until = DATE_ADD(NOW(), INTERVAL ${minutes} MINUTE) WHERE workspace_id = ? AND user_id = ?`, [req.membership.workspace_id, req.params.userId]); res.json({ ok: true }); });
 
 app.post('/api/uploads', requireAuth, requireMember, async (req, res) => {
   const fileName = String(req.body.fileName || 'upload').slice(0, 255); const mimeType = String(req.body.mimeType || 'application/octet-stream').slice(0, 120); const encoded = String(req.body.data || '');
